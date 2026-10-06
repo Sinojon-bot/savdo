@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Savdo — Скачать</title>
+<meta name="theme-color" content="#1a3c34">
+<meta name="description" content="Скачать Savdo для Android и iPhone. Как приложение.">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Sora:wght@700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<style>
+:root{--forest:#1a3c34;--ink:#0f172a;--muted:#64748b;--bg:#eef1f4;--paper:#fff;--line:#e2e8f0;--gold:#e2b13c}
+*{box-sizing:border-box}
+body{margin:0;min-height:100dvh;font:16px/1.45 Manrope,system-ui,-apple-system,sans-serif;color:var(--ink);background:linear-gradient(180deg,#f4f7f6,var(--bg));padding:24px 16px 48px}
+.wrap{max-width:440px;margin:0 auto}
+.hero{text-align:center;margin-bottom:22px}
+.logo{width:88px;height:88px;margin:0 auto 14px;border-radius:22px;display:grid;place-items:center;font:700 36px Sora,sans-serif;color:#2a2208;background:linear-gradient(145deg,#f0c35a,#d9a62e);box-shadow:0 14px 34px rgba(226,177,60,.35)}
+h1{margin:0;font:700 32px/1 Sora,sans-serif;letter-spacing:-.03em}
+.sub{margin:10px 0 0;color:var(--muted);font-size:14px}
+.store{background:var(--paper);border:1px solid var(--line);border-radius:24px;padding:20px;margin:12px 0;box-shadow:0 12px 32px rgba(15,23,42,.06)}
+.row{display:flex;gap:14px;align-items:center;margin-bottom:14px}
+.icon{width:64px;height:64px;border-radius:16px;background:linear-gradient(145deg,#14352e,#1a3c34);color:#f0c35a;display:grid;place-items:center;font:700 22px Sora,sans-serif;flex:0 0 auto}
+.meta b{display:block;font-size:18px;font-family:Sora,sans-serif}
+.meta span{color:var(--muted);font-size:13px}
+.btn{display:block;width:100%;border:0;border-radius:14px;padding:15px 16px;font:800 16px Manrope,sans-serif;cursor:pointer;text-decoration:none;text-align:center}
+.btn.g{background:#01875f;color:#fff}
+.btn.a{background:#000;color:#fff}
+.btn.o{background:#fff;border:1px solid var(--line);color:var(--ink);margin-top:10px}
+.ok{display:none;margin-top:10px;padding:12px;border-radius:12px;background:#e7f5ef;color:#1f8a66;font-size:13px;font-weight:700}
+.lang{display:flex;gap:8px;margin-bottom:16px}
+.lang button{flex:1;border:1px solid var(--line);background:#fff;border-radius:12px;padding:10px;font-weight:700;cursor:pointer}
+.lang button.on{background:var(--forest);color:#fff;border-color:var(--forest)}
+.hint{margin-top:18px;font-size:12px;color:var(--muted);text-align:center;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="lang" id="langs"></div>
+  <div class="hero">
+    <div class="logo">S</div>
+    <h1>Savdo</h1>
+    <p class="sub" id="tag"></p>
+  </div>
+
+  <div class="store">
+    <div class="row">
+      <div class="icon">A</div>
+      <div class="meta"><b id="aTitle"></b><span id="aSub"></span></div>
+    </div>
+    <button class="btn g" type="button" id="aBtn"></button>
+    <div class="ok" id="aOk"></div>
+  </div>
+
+  <div class="store">
+    <div class="row">
+      <div class="icon"></div>
+      <div class="meta"><b id="iTitle"></b><span id="iSub"></span></div>
+    </div>
+    <button class="btn a" type="button" id="iBtn"></button>
+    <div class="ok" id="iOk"></div>
+  </div>
+
+  <a class="btn o" href="/" id="openBtn"></a>
+  <p class="hint" id="hint"></p>
+</div>
+<script>
+const T={
+tg:{
+  tag:'Барномаи касса — скачать ва кор кунед',
+  aTitle:'Android', aSub:'Скачать · насб ба экран', aBtn:'Скачать',
+  aOk:'Chrome → «Установить» / «Насб». Баъд аз иконка кушоед.',
+  iTitle:'iPhone', iSub:'Скачать · ба экрани асосӣ', iBtn:'Скачать',
+  iOk:'Safari → Куниш → «Ба экрани асосӣ». Баъд аз иконка кушоед.',
+  open:'Кушодани барнома',
+  hint:'Бе Wi‑Fi-и махсус: суроғаи интернет (домен)-ро кушоед → Скачать → тамом. Як база барои ҳама.'
+},
+ru:{
+  tag:'Касса — скачайте и пользуйтесь',
+  aTitle:'Android', aSub:'Скачать · установить на экран', aBtn:'Скачать',
+  aOk:'Chrome → «Установить приложение». Потом открывайте с иконки.',
+  iTitle:'iPhone', iSub:'Скачать · на экран Домой', iBtn:'Скачать',
+  iOk:'Safari → Поделиться → «На экран Домой». Потом с иконки.',
+  open:'Открыть приложение',
+  hint:'Без общего Wi‑Fi: откройте сайт в интернете (домен) → Скачать → готово. Одна база для всех.'
+},
+en:{
+  tag:'Shop app — download and go',
+  aTitle:'Android', aSub:'Download · install to home screen', aBtn:'Download',
+  aOk:'Chrome → Install app. Then open from the icon.',
+  iTitle:'iPhone', iSub:'Download · Add to Home Screen', iBtn:'Download',
+  iOk:'Safari → Share → Add to Home Screen. Then open from the icon.',
+  open:'Open the app',
+  hint:'No special Wi‑Fi: open the internet site (domain) → Download → done. One database for everyone.'
+}};
+let lang=localStorage.getItem('savdo_dl_lang')||(/tg/i.test(navigator.language)?'tg':/en/i.test(navigator.language)?'en':'ru');
+let deferred=null;
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferred=e;render()});
+function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent)}
+function isAndroid(){return /android/i.test(navigator.userAgent)}
+function render(){
+  const x=T[lang]||T.ru;
+  localStorage.setItem('savdo_dl_lang',lang);
+  langs.innerHTML=['tg','ru','en'].map(l=>`<button class="${l===lang?'on':''}" data-l="${l}">${l.toUpperCase()}</button>`).join('');
+  document.querySelectorAll('#langs button').forEach(b=>b.onclick=()=>{lang=b.dataset.l;render()});
+  tag.textContent=x.tag;
+  aTitle.textContent=x.aTitle;aSub.textContent=x.aSub;aBtn.textContent=x.aBtn;aOk.textContent=x.aOk;
+  iTitle.textContent=x.iTitle;iSub.textContent=x.iSub;iBtn.textContent=x.iBtn;iOk.textContent=x.iOk;
+  openBtn.textContent=x.open;hint.textContent=x.hint;
+}
+aBtn.onclick=async()=>{
+  aOk.style.display='block';iOk.style.display='none';
+  if(deferred){deferred.prompt();await deferred.userChoice;return}
+  if(isAndroid())alert((T[lang]||T.ru).aOk);
+  else location.href='/?install=1';
+};
+iBtn.onclick=()=>{
+  iOk.style.display='block';aOk.style.display='none';
+  alert((T[lang]||T.ru).iOk);
+};
+render();
+</script>
+</body>
+</html>

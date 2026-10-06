@@ -1,0 +1,29 @@
+СИЛКАИ РОЙГОН (GitHub + Render)
+================================
+
+GitHub Pages — фақат сайтҳои статик. Savdo сервер + база дорад,
+бинобар ин Pages кофӣ нест.
+
+Роҳи ройгон:
+1) Дар GitHub аккаунт кушоед (github.com) — ройгон
+2) New repository → ном: savdo → Create
+3) Upload files: ҳамаи файли папкаи Savdo (бе data/)
+   Ё GitHub Desktop насб кунед ва папкаро Publish кунед
+4) Ба render.com равед → Sign up with GitHub — ройгон
+5) New → Web Service → репозиторийи savdo-ро интихоб
+6) Settings:
+   - Runtime: Node
+   - Build: (холӣ ё node -v)
+   - Start: npm start
+   - Instance: Free
+7) Deploy → силка мебарояд:
+   https://savdo-xxxx.onrender.com
+8) Одамон: ҳамин силка → /download → Скачать
+   Android / iPhone — бе Wi‑Fi
+
+МУҲИМ (Free):
+- Агар 15 дақиқа касе накушояд, Render хоб меравад (1 дақиқа бедор мешавад)
+- Базаи ройгон ҳангоми redeploy метавонад тоза шавад
+  (барои доими: диск пулакӣ ё backup)
+
+Вақте репозиторий тайёр шуд — силкаи GitHub-ро нависед, кӯмак мекунам.
