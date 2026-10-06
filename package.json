@@ -1,20 +1,13 @@
 {
-  "name": "savdo-mobile",
-  "private": true,
+  "name": "savdo",
   "version": "1.0.0",
-  "description": "Savdo Android/iOS shell (Capacitor). Builds APK when Android Studio is installed.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "build:web": "node sync-web.mjs",
-    "cap:add:android": "npx cap add android",
-    "cap:sync": "npm run build:web && npx cap sync",
-    "open:android": "npx cap open android"
-  },
-  "dependencies": {
-    "@capacitor/android": "^6.2.0",
-    "@capacitor/core": "^6.2.0",
-    "@capacitor/ios": "^6.2.0"
-  },
-  "devDependencies": {
-    "@capacitor/cli": "^6.2.0"
+    "start": "node server.mjs",
+    "dev": "node server.mjs"
   }
 }

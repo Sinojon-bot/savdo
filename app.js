@@ -36,6 +36,7 @@ const _boot=document.querySelector('#bootLoading'); if(_boot)_boot.textContent=t
 let state=null,view=location.hash.slice(1)||'home',period='month',search='',tab='all',cat='all',authMode='register';
 let pendingImage=null; // dataURL | '' | null(keep)
 let cart={}; // productId -> qty
+let cartPrices={}; // productId -> unit price in minor units (override at sale)
 let cartDiscount={percent:0,amount:0}; // amount in major units for input; applied at checkout
 let cartWarehouse=1;
 let cartWholesale=false;
@@ -80,6 +81,7 @@ function readPermsFromBody(b){
   return PERM_KEYS.filter(k=>b['perm_'+k]);
 }
 function sellP(p){
+  if(cartPrices[p.id]!=null)return Number(cartPrices[p.id])||0;
   if(cartWholesale){const w=Number(p.wholesale_price)||0;if(w>0)return w}
   const promo=Number(p.promo_price)||0;return promo>0?promo:p.price;
 }
@@ -110,6 +112,15 @@ function isPublicCloud(){
   if(!h||h==='localhost'||h==='127.0.0.1')return false;
   if(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h))return false;
   return true;
+}
+function isNativeShell(){
+  try{
+    const C=window.Capacitor;
+    if(C&&typeof C.isNativePlatform==='function')return !!C.isNativePlatform();
+    if(C&&C.isNative===true)return true;
+    const href=String(location.href||'');
+    return href.startsWith('capacitor:')||href.startsWith('ionic:');
+  }catch{return false}
 }
 function needsHubField(){
   return isNativeShell() || !isPublicCloud();
@@ -203,7 +214,11 @@ async function api(path,data){
       body:write?JSON.stringify({...data,op_id}):undefined
     });
     const b=await r.json();
-    if(!r.ok)throw Error(b.error||t('err'));
+    if(!r.ok){
+      const err=Error(b.error||t('err'));
+      err.status=r.status;
+      throw err;
+    }
     if(path==='state'){
       delete b._offline;
       localStorage.setItem(STATE_KEY,JSON.stringify(b));
@@ -217,12 +232,18 @@ async function api(path,data){
       applyOffline(path,data);
       return {ok:true,queued:true};
     }
-    if(path==='state'){
+    // 401 = need login — never fall back to stale cache
+    if(path==='state'&&(e.status===401||/ворид|войдите|sign in/i.test(String(e.message||'')))){
+      throw e;
+    }
+    if(path==='state'&&!e.status){
       const raw=localStorage.getItem(STATE_KEY);
       if(raw){
-        const b=JSON.parse(raw);
-        b._offline=true;
-        return b;
+        try{
+          const b=JSON.parse(raw);
+          b._offline=true;
+          return b;
+        }catch{}
       }
     }
     if(e&&e.name==='AbortError')throw Error(t('no_net'));
@@ -270,8 +291,15 @@ function applyOffline(path,data){
 async function hubAlive(){
   try{
     if(!hubBase())return false;
-    const r=await fetch(apiUrl('sync/info'),{method:'GET',credentials:'include',headers:{'X-Savdo-Lang':lang},cache:'no-store'});
-    return r.ok;
+    const ctrl=typeof AbortController!=='undefined'?new AbortController():null;
+    const timer=ctrl?setTimeout(()=>ctrl.abort(),5000):null;
+    try{
+      const r=await fetch(apiUrl('sync/info'),{
+        method:'GET',credentials:'include',headers:{'X-Savdo-Lang':lang},cache:'no-store',
+        signal:ctrl?ctrl.signal:undefined
+      });
+      return r.ok;
+    }finally{if(timer)clearTimeout(timer)}
   }catch{return false}
 }
 async function fetchHubInfo(){
@@ -410,8 +438,8 @@ async function load(){
     if(queueCount())syncNow({quiet:true});
   }catch(e){
     hideSplash();
-    if(String(e.message).includes('ворид')||/sign in|войдите|ворид/i.test(String(e.message)))auth();
-    else document.querySelector('#app').innerHTML=`<div class="loading">${esc(e.message)} <button class="primary" onclick="load()">${t('retry')}</button></div>`;
+    if(e.status===401||/ворид|войдите|sign in/i.test(String(e.message||'')))auth();
+    else document.querySelector('#app').innerHTML=`<div class="loading">${esc(e.message||t('err'))} <button class="primary" onclick="load()">${t('retry')}</button></div>`;
   }
 }
 function showModePicker(onPick){
@@ -908,9 +936,10 @@ function shiftBarHtml(){
       <button class="gold" style="padding:8px 12px;font-size:12px" onclick="openShiftDialog()">${t('shift_open_btn')}</button>
     </div>`;
   }
+  const who=sh.cashier_name?` · ${esc(sh.cashier_name)}`:'';
   return `<div class="shift-bar on">
     <div>
-      <b>${t('shift')} #${sh.id}</b>
+      <b>${t('shift')} #${sh.id}${who}</b>
       <span>${t('shift_expected')}: ${cash(st?.expected_cash||0)} · ${t('checks')}: ${st?.checks||0}</span>
     </div>
     <div class="acts">
@@ -921,8 +950,18 @@ function shiftBarHtml(){
   </div>`;
 }
 function openShiftDialog(){
+  const list=state.cashiers||[];
+  const me=list.find(c=>c.id===state.user?.id)||list[0];
+  const opts=list.length
+    ? `<label class="wide">${t('shift_cashier')}<select name="cashier_id" required>
+        ${list.map(c=>`<option value="${c.id}" ${me&&c.id===me.id?'selected':''}>${esc(c.name)}${c.has_pin?'':' · '+t('pin_not_set_short')}</option>`).join('')}
+      </select></label>`
+    : `<input type="hidden" name="cashier_id" value="">`;
   showModal(t('shift_open_btn'),
-    field(t('shift_open_cash'),'open_cash','number','0',true,'required min="0" step="0.01"'),
+    opts
+    +field(t('shift_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" autocomplete="one-time-code"')
+    +field(t('shift_open_cash'),'open_cash','number','0',true,'required min="0" step="0.01"')
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('shift_pin_hint')}</p>`,
     async b=>{await api('shift/open',b);toast(t('shift_opened'));}
   );
 }
@@ -996,6 +1035,7 @@ function openInventory(){
   );
 }
 window.openShiftDialog=openShiftDialog;
+window.editCartPrice=editCartPrice;
 window.openCashMove=openCashMove;
 window.closeShiftDialog=closeShiftDialog;
 window.openDiscount=openDiscount;
@@ -1037,10 +1077,26 @@ function cartSet(id,qty){
   const p=state.products.find(x=>x.id===Number(id));
   if(!p)return;
   qty=Math.max(0,Math.min(whStock(p),Number(qty)||0));
-  if(qty<=0)delete cart[id];else cart[id]=qty;
+  if(qty<=0){delete cart[id];delete cartPrices[id]}else cart[id]=qty;
   render();
 }
-function cartClear(){cart={};render()}
+function cartClear(){cart={};cartPrices={};render()}
+function editCartPrice(id){
+  const p=state.products.find(x=>x.id===Number(id));
+  if(!p)return;
+  const cur=(sellP(p)/100).toFixed(2);
+  showModal(t('edit_sale_price'),
+    `<p class="wide" style="margin:0 0 8px;color:var(--muted);font-size:13px">${esc(p.name)} · ${t('catalog_price')}: ${cash(p.price)}</p>`
+    +field(t('sell_price'),'price','number',cur,true,'required min="0" step="0.01"')
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('sale_price_hint')}</p>`,
+    async b=>{
+      const v=Number(b.price);
+      if(!(v>=0))throw Error(t('err'));
+      cartPrices[p.id]=Math.round(v*100);
+      return{ok:true};
+    }
+  );
+}
 function checkoutPayload(lines,pay,extra={}){
   const body={
     pay,
@@ -1048,7 +1104,11 @@ function checkoutPayload(lines,pay,extra={}){
     warehouse:cartWarehouse,
     wholesale:cartWholesale?1:0,
     send_telegram:sendTgReceipt?1:0,
-    items:lines.map(l=>({product:l.p.id,qty:l.qty})),
+    items:lines.map(l=>{
+      const row={product:l.p.id,qty:l.qty};
+      if(cartPrices[l.p.id]!=null)row.price=cartPrices[l.p.id]/100;
+      return row;
+    }),
     ...extra
   };
   if(cartCustomerId)body.customer=cartCustomerId;
@@ -1058,7 +1118,7 @@ function checkoutPayload(lines,pay,extra={}){
   return body;
 }
 async function afterCheckout(res){
-  cart={};cartDiscount={percent:0,amount:0};cartCustomerId='';cartRedeemPoints=0;
+  cart={};cartPrices={};cartDiscount={percent:0,amount:0};cartCustomerId='';cartRedeemPoints=0;
   const bits=[res.doc_no&&(t('paid_saved')+' · '+res.doc_no)];
   if(res.points_spent)bits.push('⭐ −'+res.points_spent);
   if(res.points)bits.push('⭐ +'+res.points);
@@ -1242,8 +1302,12 @@ function kassaPage(s){
         <div class="panel-b cart-lines">
           ${lines.length?lines.map(({p,qty})=>{
             const price=sellP(p);
+            const custom=cartPrices[p.id]!=null;
             return `<div class="cart-line">
-            <div><b>${esc(p.name)}</b><div class="meta">${cash(price)} × ${qty} ${unitLabel(p.unit)} = ${cash(price*qty)}</div></div>
+            <div><b>${esc(p.name)}</b>
+              <div class="meta">${cash(price)} × ${qty} ${unitLabel(p.unit)} = ${cash(price*qty)}${custom?' · '+t('price_changed'):''}</div>
+              <button type="button" class="outline" style="margin-top:6px;padding:6px 10px;font-size:12px" onclick="editCartPrice(${p.id})">${t('edit_sale_price')}</button>
+            </div>
             <div class="qtybox">
               <button type="button" onclick="cartSet(${p.id},${qty-1})">−</button>
               <span>${qty}</span>
@@ -1631,7 +1695,8 @@ function settingsPage(){
       <div class="acts" style="margin-bottom:12px"><button class="primary" type="button" onclick="openStaff()">${t('add_staff')}</button></div>
       ${(state.staff||[]).length?`<div class="tablewrap"><table><thead><tr><th>${t('name')}</th><th>Email</th><th>${t('role')}</th>${isCompany()?`<th>${t('permissions')}</th>`:''}<th></th></tr></thead>
       <tbody>${state.staff.map(st=>`<tr>
-        <td>${esc(st.name)}</td><td>${esc(st.email)}</td>
+        <td><b>${esc(st.name)}</b>${st.has_pin?'':` · <span style="color:var(--danger);font-size:12px">${t('pin_not_set_short')}</span>`}</td>
+        <td>${esc(st.email)}</td>
         <td>${st.role==='cashier'?t('role_cashier'):t('role_admin')}</td>
         ${isCompany()?`<td style="font-size:11px;color:var(--muted)">${esc((st.permissions||[]).slice(0,6).join(', '))}${(st.permissions||[]).length>6?'…':''}</td>`:''}
         <td class="acts">
@@ -2038,7 +2103,7 @@ function suppliersPage(s){
       <div><h2>${t('suppliers')}</h2><p>${t('supplier_debt')}</p></div>
       <div class="acts">
         <button class="outline" onclick="openSupplierPayment()">${t('pay_supplier')}</button>
-        <button class="outline" onclick="openSupplierOpeningDebt()">${t('opening_debt')}</button>
+        <button class="gold" onclick="openSupplierOpeningDebt()">${t('opening_debt_supplier')}</button>
         <button class="primary" onclick="openSupplier()">${t('new_supplier')}</button>
       </div>
     </div>
@@ -2050,7 +2115,7 @@ function suppliersPage(s){
         <td>${esc(c.phone||'—')}</td>
         <td>${c.debt?`<span class="pill debt">${cash(c.debt)}</span>`:`<span class="pill">${t('no_debt')}</span>`}</td>
         <td class="acts">
-          <button class="outline" onclick="openSupplierOpeningDebt(${c.id})">${t('opening_debt')}</button>
+          <button class="outline" onclick="openSupplierOpeningDebt(${c.id})">${t('opening_debt_supplier')}</button>
           ${c.debt?`<button class="gold" onclick="openSupplierPayment(${c.id})">${t('payment')}</button>`:''}
           <button class="outline" onclick='openSupplier(${JSON.stringify({id:c.id,name:c.name,phone:c.phone,note:c.note})})'>${t('edit')}</button>
           <button class="danger" onclick="archiveSupplier(${c.id})">${t('hide')}</button>
@@ -2334,7 +2399,8 @@ function openStaff(){
     +`<label class="wide">Email<input name="email" type="email" required></label>`
     +field(t('staff_pass'),'password','password','',true,'required minlength="8"')
     +`<label>${t('role')}<select name="role"><option value="cashier">${t('role_cashier')}</option><option value="admin">${t('role_admin')}</option></select></label>`
-    +field(t('pin'),'pin','password','',true,'inputmode="numeric" maxlength="8"')
+    +field(t('pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"')
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_pin_hint')}</p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(['kassa','shift'])}</div>`:''),
     b=>{
       if(isCompany())b.permissions=readPermsFromBody(b);
@@ -2348,7 +2414,8 @@ function editStaff(id){
   showModal(t('edit_staff'),
     field(t('name'),'name','text',st.name,true)
     +`<label>${t('role')}<select name="role"><option value="cashier" ${st.role==='cashier'?'selected':''}>${t('role_cashier')}</option><option value="admin" ${st.role==='admin'?'selected':''}>${t('role_admin')}</option></select></label>`
-    +field(t('pin'),'pin','password','',false,'inputmode="numeric" maxlength="8"')
+    +field(t('pin'),'pin','password','',!st.has_pin,'inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"'+(st.has_pin?'':' required'))
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${st.has_pin?t('staff_pin_change'):t('staff_pin_hint')}</p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(st.permissions||[])}</div>`:''),
     b=>{
       b.id=id;
@@ -2528,11 +2595,13 @@ window.addEventListener('beforeinstallprompt',e=>{
 });
 window.addEventListener('appinstalled',()=>{deferredInstall=null;hideInstall();toast(t('app_installed'))});
 const isTunnel=/\.trycloudflare\.com$/i.test(location.hostname)||/\.loca\.lt$/i.test(location.hostname);
-if('serviceWorker' in navigator && !isNativeShell()){
-  if(isTunnel){
-    navigator.serviceWorker.getRegistrations?.().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});
-  }else{
-    navigator.serviceWorker.register('/sw.js').catch(()=>{});
+try{
+  if('serviceWorker' in navigator && !isNativeShell()){
+    if(isTunnel){
+      navigator.serviceWorker.getRegistrations?.().then(rs=>rs.forEach(r=>r.unregister())).catch(()=>{});
+    }else{
+      navigator.serviceWorker.register('/sw.js').catch(()=>{});
+    }
   }
-}
+}catch{}
 load();

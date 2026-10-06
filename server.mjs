@@ -141,6 +141,7 @@ for (const sql of [
   'ALTER TABLE users ADD COLUMN hub_token TEXT NOT NULL DEFAULT \'\'',
   'ALTER TABLE users ADD COLUMN biz_mode TEXT NOT NULL DEFAULT \'\'',
   'ALTER TABLE movements ADD COLUMN fiscal_no TEXT NOT NULL DEFAULT \'\'',
+  'ALTER TABLE shifts ADD COLUMN cashier_id INTEGER',
   `CREATE TABLE IF NOT EXISTS journal_entries(
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -1028,14 +1029,38 @@ const server = http.createServer(async (req, res) => {
       maybeTelegramAlerts(shop).catch(() => {});
       const staff = can(u, 'staff')
         ? all(
-            `SELECT id, email, name, role, permissions FROM users
+            `SELECT id, email, name, role, permissions, pin FROM users
              WHERE (id=? OR owner_id=?) AND IFNULL(role,'')!='branch' ORDER BY id`,
             owner, owner
-          ).map(st => ({...st, permissions: [...parsePerms(st)]}))
+          ).map(st => ({
+            id: st.id,
+            email: st.email,
+            name: st.name,
+            role: st.role,
+            permissions: [...parsePerms(st)],
+            has_pin: !!(st.pin)
+          }))
+        : [];
+      const cashiers = (can(u, 'shift') || can(u, 'kassa') || can(u, 'staff'))
+        ? all(
+            `SELECT id, name, pin FROM users
+             WHERE (id=? OR owner_id=?) AND IFNULL(role,'')!='branch' ORDER BY id`,
+            owner, owner
+          ).map(st => ({id: st.id, name: st.name, has_pin: !!(st.pin)}))
         : [];
       const perms = [...parsePerms(u)];
+      let shiftOut = shift;
+      if (shiftOut) {
+        let cashierName = '';
+        if (shiftOut.cashier_id) {
+          cashierName = one('SELECT name FROM users WHERE id=?', shiftOut.cashier_id)?.name || '';
+        }
+        if (!cashierName && shiftOut.note) cashierName = String(shiftOut.note);
+        shiftOut = {...shiftOut, cashier_name: cashierName};
+      }
       return reply(200, {
         user: {
+          id: u.id,
           name: shop.name,
           email: u.email,
           currency: shop.currency,
@@ -1134,7 +1159,8 @@ const server = http.createServer(async (req, res) => {
         suppliers,
         supplier_payments: supplierPayments,
         staff,
-        shift,
+        cashiers,
+        shift: shiftOut,
         shift_stats: shiftStats(u, shift),
         cash_moves: cashMoves,
         cashbook,
@@ -1577,13 +1603,28 @@ const server = http.createServer(async (req, res) => {
     } else if (url.pathname === '/api/shift/open') {
       if (openShift(S)) throw Error(te(L, 'shift_open_exists'));
       const openCash = money(b.open_cash ?? 0);
+      const cashierId = Number(b.cashier_id) || u.id;
+      const cashier = one(
+        `SELECT * FROM users WHERE id=? AND (id=? OR owner_id=?) AND IFNULL(role,'')!='branch'`,
+        cashierId,
+        owner,
+        owner
+      );
+      if (!cashier) throw Error(te(L, 'not_found'));
+      const pin = String(b.pin || '').trim();
+      if (!cashier.pin) throw Error(te(L, 'pin_not_set'));
+      let pinOk = false;
+      try { pinOk = /^\d{4,8}$/.test(pin) && verify(pin, cashier.pin); } catch { pinOk = false; }
+      if (!pinOk) throw Error(te(L, 'bad_pin'));
       const r = run(
-        `INSERT INTO shifts(user_id,opened_at,open_cash,status,note) VALUES(?,?,?,'open','')`,
+        `INSERT INTO shifts(user_id,opened_at,open_cash,status,note,cashier_id) VALUES(?,?,?,'open',?,?)`,
         S,
         new Date().toISOString(),
-        openCash
+        openCash,
+        String(cashier.name || '').slice(0, 100),
+        cashier.id
       );
-      extra = {ok: true, id: Number(r.lastInsertRowid)};
+      extra = {ok: true, id: Number(r.lastInsertRowid), cashier_id: cashier.id, cashier_name: cashier.name};
     } else if (url.pathname === '/api/shift/cash') {
       const shift = openShift(S);
       if (!shift) throw Error(te(L, 'shift_needed'));
@@ -1695,14 +1736,20 @@ const server = http.createServer(async (req, res) => {
       for (const it of items) {
         const id = Number(it.product);
         const n = qty(it.qty);
-        merged.set(id, (merged.get(id) || 0) + n);
+        const prev = merged.get(id) || {n: 0, customPrice: null};
+        prev.n += n;
+        if (it.price !== undefined && it.price !== null && it.price !== '') {
+          prev.customPrice = money(it.price);
+        }
+        merged.set(id, prev);
       }
       const wh = Number(b.warehouse) === 2 ? 2 : 1;
       const wholesale = !!(b.wholesale === true || b.wholesale === 1 || b.wholesale === '1');
       const created = tx(() => {
         const lines = [];
         let total = 0;
-        for (const [productId, n] of merged) {
+        for (const [productId, rowIn] of merged) {
+          const n = rowIn.n;
           const p = one(
             'SELECT * FROM products WHERE id=? AND user_id=? AND active=1',
             productId,
@@ -1711,7 +1758,8 @@ const server = http.createServer(async (req, res) => {
           if (!p) throw Error(te(L, 'product_missing'));
           const avail = wh === 2 ? (Number(p.stock2) || 0) : p.stock;
           if (n > avail) throw Error(te(L, 'stock_only', {name: p.name, n: avail}));
-          const unitPrice = sellPrice(p, wholesale);
+          let unitPrice = sellPrice(p, wholesale);
+          if (rowIn.customPrice != null) unitPrice = rowIn.customPrice;
           if (Number(shop.block_below_cost) && unitPrice < p.cost) {
             throw Error(te(L, 'below_cost') + ': ' + p.name);
           }
@@ -2447,11 +2495,8 @@ const server = http.createServer(async (req, res) => {
       const role = b.role === 'admin' ? 'admin' : 'cashier';
       const shop = one('SELECT * FROM users WHERE id=?', S) || u;
       const pin = String(b.pin || '').trim();
-      let pinHash = '';
-      if (pin) {
-        if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'bad_pin'));
-        pinHash = hash(pin);
-      }
+      if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'pin_need_staff'));
+      const pinHash = hash(pin);
       const permsJson = normalizePermsInput(role, b.permissions);
       run(
         'INSERT INTO users(email,password,name,currency,zone,low_stock,role,owner_id,pin,active_shop_id,permissions) VALUES(?,?,?,?,?,?,?,?,?,?,?)',

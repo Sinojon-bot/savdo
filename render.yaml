@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: "node -v"
-    startCommand: "npm start"
+    startCommand: "node server.mjs"
     envVars:
       - key: NODE_VERSION
         value: "22"
