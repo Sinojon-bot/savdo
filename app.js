@@ -33,7 +33,7 @@ const _splash=document.querySelector('#splashText'); if(_splash)_splash.textCont
 const _boot=document.querySelector('#bootLoading'); if(_boot)_boot.textContent=t('loading');
 
 
-let state=null,view=location.hash.slice(1)||'home',period='month',search='',tab='all',cat='all',authMode='register';
+let state=null,view=location.hash.slice(1)||'home',period='month',search='',tab='all',cat='all',authMode='login';
 let pendingImage=null; // dataURL | '' | null(keep)
 let cart={}; // productId -> qty
 let cartPrices={}; // productId -> unit price in minor units (override at sale)
@@ -44,6 +44,7 @@ let cartCustomerId='';
 let cartRedeemPoints=0;
 let sendTgReceipt=false;
 let authPinMode=false;
+let authRolePick=null; // null=ask role · 'cashier' | 'director' | 'register'
 let inventDraft={}; // productId -> counted
 let needWelcome=true;
 const PERM_KEYS=['kassa','stock','customers','suppliers','cashbook','reports','analyze','audit','settings','void','discount','import','backup','staff','shops','accounting','fiscal','shift'];
@@ -568,6 +569,34 @@ function auth(){
     return;
   }
   const mode=draftMode();
+  // 1) Ask role first: cashier or director
+  if(authRolePick==null){
+    document.querySelector('#app').innerHTML=`
+    <div class="auth">
+      <section class="auth-art">
+        <div class="brand"><span class="mark">S</span>Savdo</div>
+        <h1>${t('auth_title')}</h1>
+        <p>${t('auth_sub')}</p>
+      </section>
+      <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
+        <h2>${t('role_ask')}</h2>
+        <div class="sub">${t('role_ask_sub')}</div>
+        <button type="button" class="primary" id="roleCashier" style="width:100%;margin:0 0 10px">${t('role_cashier')}</button>
+        <button type="button" class="outline" id="roleDirector" style="width:100%;margin:0 0 10px;min-height:48px">${t('role_director')}</button>
+        <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
+      </div></section>
+    </div>`;
+    document.querySelector('#roleCashier').onclick=()=>{authRolePick='cashier';authMode='login';auth()};
+    document.querySelector('#roleDirector').onclick=()=>{authRolePick='director';authMode='login';auth()};
+    document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);authRolePick=null;auth()};
+    return;
+  }
+  const isCashier=authRolePick==='cashier';
+  const isReg=authRolePick==='register'||authMode==='register';
+  const title=isReg?(mode==='company'?t('mode_company'):t('create_shop'))
+    :(isCashier?t('cashier_enter_title'):t('director_enter_title'));
+  const hint=isReg?t('register_hint')
+    :(isCashier?t('cashier_login_hint'):t('director_login_hint'));
   document.querySelector('#app').innerHTML=`
   <div class="auth">
     <section class="auth-art">
@@ -575,27 +604,33 @@ function auth(){
       <h1>${t('auth_title')}</h1>
       <p>${t('auth_sub')}</p>
       <div class="auth-badges">
+        <span>${isCashier?t('role_cashier'):t('role_director')}</span>
         <span>${mode==='company'?t('mode_company_badge'):t('mode_shop_badge')}</span>
-        <span>${t('badge_pc')}</span><span>${t('badge_android')}</span><span>${t('badge_iphone')}</span><span>${t('badge_offline')}</span>
       </div>
     </section>
     <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
-      <h2>${authMode==='login'?t('welcome'):(mode==='company'?t('mode_company'):t('create_shop'))}</h2>
-      <div class="sub">${authMode==='login'?t('login_hint'):t('register_hint')}</div>
+      <h2>${title}</h2>
+      <div class="sub">${hint}</div>
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
-        ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
+        ${isReg?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
         <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="900112233" maxlength="20" enterkeyhint="next"></label>
         <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="current-password" placeholder="${t('pin_hint')}" enterkeyhint="go"></label>
         <div class="error" id="authError"></div>
-        <button class="primary">${authMode==='login'?t('login'):t('start')}</button>
+        <button class="primary">${isReg?t('start'):t('login')}</button>
       </form>
-      <button class="switch" id="switchBtn">${authMode==='login'?t('new_account'):t('have_account')}</button>
+      ${!isCashier?`<button class="switch" id="switchBtn" type="button">${isReg?t('have_account'):t('new_account')}</button>`:''}
+      <button class="switch" id="backRole" type="button">${t('role_back')}</button>
       <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
     </div></section>
   </div>`;
-  document.querySelector('#switchBtn').onclick=()=>{authMode=authMode==='login'?'register':'login';auth()};
-  document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);auth()};
+  document.querySelector('#backRole').onclick=()=>{authRolePick=null;authMode='login';auth()};
+  document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);authRolePick=null;auth()};
+  document.querySelector('#switchBtn')?.addEventListener('click',()=>{
+    if(isReg){authRolePick='director';authMode='login'}
+    else{authRolePick='register';authMode='register'}
+    auth();
+  });
   document.querySelector('#authForm').onsubmit=async e=>{
     e.preventDefault();const btn=e.target.querySelector('.primary');btn.disabled=true;
     try{
@@ -604,9 +639,21 @@ function auth(){
       delete body.hub;
       if(hub)setHubBase(hub);
       if(!hubBase())throw Error(t('need_hub_url'));
-      if(authMode==='register')body.biz_mode=draftMode()||'shop';
-      await api(authMode==='register'?'register':'login',body);
-      // Already entered app code at login — do not ask unlock again.
+      if(isReg){
+        body.biz_mode=draftMode()||'shop';
+        await api('register',body);
+      }else{
+        await api('login',body);
+        // Cashier path: must be staff cashier (not director creating a shop).
+        if(isCashier){
+          const s=await api('state');
+          if(s.user?.role!=='cashier'){
+            setSessionToken('');
+            try{await api('logout',{})}catch{}
+            throw Error(t('cashier_only_login'));
+          }
+        }
+      }
       appUnlocked=true;
       load();
     }catch(err){document.querySelector('#authError').textContent=err.message;btn.disabled=false}
