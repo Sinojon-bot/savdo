@@ -24,6 +24,7 @@ function cookieHeader() {
   return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
+let bearer = '';
 async function api(path, body, method) {
   const m = method || (body === undefined ? 'GET' : 'POST');
   const r = await fetch(`${BASE}/api/${path.replace(/^\//, '')}`, {
@@ -31,7 +32,8 @@ async function api(path, body, method) {
     headers: {
       'Content-Type': 'application/json',
       'X-Savdo-Lang': 'tg',
-      ...(cookieHeader() ? {Cookie: cookieHeader()} : {})
+      ...(cookieHeader() ? {Cookie: cookieHeader()} : {}),
+      ...(bearer ? {Authorization: 'Bearer ' + bearer, 'X-Savdo-Token': bearer} : {})
     },
     body: body === undefined ? undefined : JSON.stringify(body)
   });
@@ -45,6 +47,7 @@ async function api(path, body, method) {
     err.body = j;
     throw err;
   }
+  if (j && j.token) bearer = j.token;
   return j;
 }
 
@@ -116,6 +119,21 @@ async function main() {
     const s = await api('state');
     if (!s.user) throw Error('format login failed');
     return s.user.phone || phone;
+  });
+
+  await soft('mobile token auth (no cookie)', async () => {
+    jar.clear();
+    const saved = bearer;
+    bearer = '';
+    await api('login', {phone, pin});
+    if (!bearer) throw Error('no token in login response');
+    const cookieBackup = new Map(jar);
+    jar.clear(); // simulate iPhone/Android cookie blocked
+    const s = await api('state');
+    if (!s.user) throw Error('token auth failed');
+    for (const [k, v] of cookieBackup) jar.set(k, v);
+    bearer = saved || bearer;
+    return 'token ok';
   });
 
   await soft('login without phone rejected', async () => {

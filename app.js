@@ -138,6 +138,8 @@ let installHintDismissed=localStorage.getItem('savdo_install_hide')==='1';
 const QUEUE_KEY='savdo_op_queue';
 const STATE_KEY='savdo_state_cache';
 const HUB_KEY='savdo_hub_origin';
+const TOKEN_KEY='savdo_session_token';
+const DEFAULT_CLOUD_HUB='https://savdo-1.onrender.com';
 function isPublicCloud(){
   const h=String(location.hostname||'');
   if(!h||h==='localhost'||h==='127.0.0.1')return false;
@@ -159,7 +161,8 @@ function needsHubField(){
 function hubBase(){
   const saved=String(localStorage.getItem(HUB_KEY)||'').trim().replace(/\/$/,'');
   if(saved)return saved;
-  if(isNativeShell())return '';
+  // Capacitor / offline install: talk to cloud by default (iPhone & Android).
+  if(isNativeShell())return DEFAULT_CLOUD_HUB;
   return location.origin;
 }
 function setHubBase(url){
@@ -170,6 +173,21 @@ function setHubBase(url){
   return u;
 }
 function apiUrl(path){return hubBase().replace(/\/$/,'')+'/api/'+String(path||'').replace(/^\//,'')}
+function sessionToken(){return String(localStorage.getItem(TOKEN_KEY)||'').trim()}
+function setSessionToken(tok){
+  const t=String(tok||'').trim();
+  if(t)localStorage.setItem(TOKEN_KEY,t);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+function apiHeaders(extra={}){
+  const h={'X-Savdo-Lang':lang,...extra};
+  const tok=sessionToken();
+  if(tok){
+    h.Authorization='Bearer '+tok;
+    h['X-Savdo-Token']=tok;
+  }
+  return h;
+}
 
 function isStandalone(){
   return window.matchMedia('(display-mode: standalone)').matches
@@ -233,15 +251,16 @@ async function api(path,data){
   const op_id=write?newOpId():null;
   if(!hubBase())throw Error(t('need_hub_url'));
   const ctrl=typeof AbortController!=='undefined'?new AbortController():null;
-  const timer=ctrl?setTimeout(()=>ctrl.abort(),18000):null;
+  // Render free cold-start can take ~30–50s on phone networks.
+  const timer=ctrl?setTimeout(()=>ctrl.abort(),isNativeShell()||isPublicCloud()?55000:18000):null;
   try{
     const r=await fetch(apiUrl(path),{
       method:write?'POST':'GET',
       credentials:'include',
       signal:ctrl?ctrl.signal:undefined,
       headers:write
-        ?{'Content-Type':'application/json','X-Savdo-Lang':lang,'X-Savdo-Op':op_id}
-        :{'X-Savdo-Lang':lang},
+        ?apiHeaders({'Content-Type':'application/json','X-Savdo-Op':op_id})
+        :apiHeaders(),
       body:write?JSON.stringify({...data,op_id}):undefined
     });
     const b=await r.json();
@@ -250,6 +269,7 @@ async function api(path,data){
       err.status=r.status;
       throw err;
     }
+    if(b&&b.token)setSessionToken(b.token);
     if(path==='state'){
       delete b._offline;
       localStorage.setItem(STATE_KEY,JSON.stringify(b));
@@ -563,10 +583,10 @@ function auth(){
       <h2>${authMode==='login'?t('welcome'):(mode==='company'?t('mode_company'):t('create_shop'))}</h2>
       <div class="sub">${authMode==='login'?t('login_hint'):t('register_hint')}</div>
       <form id="authForm">
-        ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||location.origin)}" placeholder="https://savdo.example.com" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
-        ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}"></label>`:''}
-        <label>${t('phone')}<input name="phone" type="tel" inputmode="tel" required autocomplete="username" placeholder="9001112233" maxlength="20"></label>
-        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>
+        ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
+        ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
+        <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="900112233" maxlength="20" enterkeyhint="next"></label>
+        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="current-password" placeholder="${t('pin_hint')}" enterkeyhint="go"></label>
         <div class="error" id="authError"></div>
         <button class="primary">${authMode==='login'?t('login'):t('start')}</button>
       </form>
@@ -2671,12 +2691,14 @@ async function logout(){
       if(st.alone){
         if(!confirm(t('leave_delete_q')))return;
         await api('account/delete',{});
+        setSessionToken('');
         needWelcome=true;cart={};cartPrices={};auth();
         return;
       }
     }
   }catch(e){toast(e.message||t('err'));return}
-  await api('logout',{});
+  try{await api('logout',{})}catch{}
+  setSessionToken('');
   needWelcome=true;cart={};cartPrices={};auth();
 }
 window.logout=logout;

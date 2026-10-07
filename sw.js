@@ -1,4 +1,4 @@
-const CACHE = 'savdo-app-v39';
+const CACHE = 'savdo-app-v40';
 const ASSETS = [
   '/',
   '/index.html',
@@ -10,6 +10,9 @@ const ASSETS = [
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png'
 ];
+
+// Always fetch fresh app shell on phones (avoid stuck old login UI).
+const NETWORK_ONLY = new Set(['/app.js', '/i18n.js', '/index.html', '/', '/sw.js']);
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -30,6 +33,13 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (url.pathname.startsWith('/api/')) return;
   if (req.method !== 'GET') return;
+
+  if (NETWORK_ONLY.has(url.pathname)) {
+    event.respondWith(
+      fetch(req, {cache: 'no-store'}).catch(() => caches.match(req).then(r => r || caches.match('/index.html')))
+    );
+    return;
+  }
 
   event.respondWith(
     fetch(req)

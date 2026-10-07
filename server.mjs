@@ -432,6 +432,17 @@ function session(res, id, req) {
       ? `savdo_session=${t}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=604800`
       : `savdo_session=${t}; HttpOnly; SameSite=Lax; Path=/; Max-Age=604800`
   );
+  return t;
+}
+function readSessionToken(req) {
+  const cookieTok = /savdo_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
+  if (cookieTok) return cookieTok;
+  const auth = String(req.headers.authorization || '');
+  const m = /^Bearer\s+([a-f0-9]+)$/i.exec(auth);
+  if (m) return m[1];
+  const hdr = String(req.headers['x-savdo-token'] || '').trim();
+  if (/^[a-f0-9]+$/i.test(hdr)) return hdr;
+  return '';
 }
 function ownerId(u) {
   return Number(u.owner_id) || u.id;
@@ -882,7 +893,7 @@ const server = http.createServer(async (req, res) => {
     res.setHeader('Vary', 'Origin');
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Content-Type, X-Savdo-Lang, X-Savdo-Op, X-Savdo-Hub'
+      'Content-Type, X-Savdo-Lang, X-Savdo-Op, X-Savdo-Hub, X-Savdo-Token, Authorization'
     );
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   }
@@ -989,7 +1000,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     const L = reqLang(req);
-    const token = /savdo_session=([a-f0-9]+)/.exec(req.headers.cookie || '')?.[1];
+    const token = readSessionToken(req);
     let u = token
       ? one(
           'SELECT u.* FROM users u JOIN sessions s ON u.id=s.user_id WHERE s.token=? AND s.expires>?',
@@ -1021,8 +1032,8 @@ const server = http.createServer(async (req, res) => {
           mode,
           pinHash
         );
-        session(res, Number(r.lastInsertRowid), req);
-        return reply(200, {ok: true});
+        const tok = session(res, Number(r.lastInsertRowid), req);
+        return reply(200, {ok: true, token: tok});
       }
 
       // login / login/pin — same: phone + app PIN (any phone format)
@@ -1034,8 +1045,8 @@ const server = http.createServer(async (req, res) => {
         if (!ok && user.password) ok = verify(pin, user.password);
       } catch { ok = false; }
       if (!ok) return reply(401, {error: te(L, 'bad_login')});
-      session(res, user.id, req);
-      return reply(200, {ok: true});
+      const tok = session(res, user.id, req);
+      return reply(200, {ok: true, token: tok});
     }
 
     if (req.method === 'POST' && url.pathname === '/api/central/ingest' && !u) {
