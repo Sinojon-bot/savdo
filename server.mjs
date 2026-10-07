@@ -142,6 +142,7 @@ for (const sql of [
   'ALTER TABLE users ADD COLUMN biz_mode TEXT NOT NULL DEFAULT \'\'',
   'ALTER TABLE movements ADD COLUMN fiscal_no TEXT NOT NULL DEFAULT \'\'',
   'ALTER TABLE shifts ADD COLUMN cashier_id INTEGER',
+  'ALTER TABLE movements ADD COLUMN cashier_id INTEGER',
   `CREATE TABLE IF NOT EXISTS journal_entries(
     id INTEGER PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -219,10 +220,16 @@ for (const sql of [
 
 // Ensure critical columns exist (Render free DB may lag behind code).
 try {
-  const shiftCols = new Set(all('PRAGMA table_info(shifts)').map(c => c.name));
+  const shiftCols = new Set(db.prepare('PRAGMA table_info(shifts)').all().map(c => c.name));
   if (!shiftCols.has('cashier_id')) db.exec('ALTER TABLE shifts ADD COLUMN cashier_id INTEGER');
 } catch (e) {
   console.error('migrate shifts.cashier_id', e?.message || e);
+}
+try {
+  const moveCols = new Set(db.prepare('PRAGMA table_info(movements)').all().map(c => c.name));
+  if (!moveCols.has('cashier_id')) db.exec('ALTER TABLE movements ADD COLUMN cashier_id INTEGER');
+} catch (e) {
+  console.error('migrate movements.cashier_id', e?.message || e);
 }
 
 function lanUrls(port) {
@@ -360,6 +367,19 @@ function isAdmin(u) {
   const r = u.role || 'admin';
   return r !== 'cashier' && r !== 'branch';
 }
+/** Shop owner / director only (not staff cashiers or branch). */
+function isDirector(u) {
+  if (!u) return false;
+  if ((u.role || '') === 'cashier' || (u.role || '') === 'branch') return false;
+  return !Number(u.owner_id);
+}
+function requireDirector(u, lang) {
+  if (!isDirector(u)) {
+    const e = Error(te(lang, 'director_only'));
+    e.status = 403;
+    throw e;
+  }
+}
 const ALL_PERMS = [
   'kassa', 'stock', 'customers', 'suppliers', 'cashbook', 'reports', 'analyze',
   'audit', 'settings', 'void', 'discount', 'import', 'backup', 'staff', 'shops',
@@ -379,7 +399,10 @@ function parsePerms(u) {
     } catch {}
   }
   if (role === 'cashier') {
-    return new Set(list && list.length ? list : DEFAULT_CASHIER_PERMS);
+    // Cashiers never get settings/reports — director only.
+    const allowed = (list && list.length ? list : DEFAULT_CASHIER_PERMS)
+      .filter(p => p !== 'settings' && p !== 'reports' && p !== 'staff' && p !== 'audit');
+    return new Set(allowed.length ? allowed : DEFAULT_CASHIER_PERMS);
   }
   return new Set(list && list.length ? list : ALL_PERMS);
 }
@@ -922,16 +945,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/login/pin') {
+      // Each person: their email + their own PIN (not a global PIN).
+      const email = String(b.email || '').trim().toLowerCase();
       const pin = String(b.pin || '').trim();
-      if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
-      const candidates = all(`SELECT * FROM users WHERE pin IS NOT NULL AND pin != ''`);
-      let user = null;
-      for (const c of candidates) {
-        try {
-          if (verify(pin, c.pin)) { user = c; break; }
-        } catch {}
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return reply(400, {error: te(L, 'need_email_pin')});
       }
-      if (!user) return reply(401, {error: te(L, 'bad_pin')});
+      if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
+      const user = one(
+        `SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`,
+        email
+      );
+      if (!user || !user.pin) return reply(401, {error: te(L, 'bad_pin')});
+      let ok = false;
+      try { ok = verify(pin, user.pin); } catch { ok = false; }
+      if (!ok) return reply(401, {error: te(L, 'bad_pin')});
       session(res, user.id, req);
       return reply(200, {ok: true});
     }
@@ -1082,6 +1110,7 @@ const server = http.createServer(async (req, res) => {
           wh2_name: shop.wh2_name || '',
           role: u.role || 'admin',
           is_admin: admin ? 1 : 0,
+          is_director: isDirector(u) ? 1 : 0,
           permissions: perms,
           has_pin: !!(u.pin),
           has_void_pin: !!(shop.void_pin),
@@ -1271,6 +1300,10 @@ const server = http.createServer(async (req, res) => {
       '/api/accounting/rebuild': 'accounting'
     };
     if (PATH_PERMS[url.pathname]) requirePerm(u, PATH_PERMS[url.pathname], L);
+    // Settings / remote / biz-mode: only shop director may change.
+    if (['/api/settings', '/api/remote-url', '/api/biz-mode'].includes(url.pathname)) {
+      requireDirector(u, L);
+    }
 
     const money = v => {
       const n = Number(v);
@@ -1684,9 +1717,38 @@ const server = http.createServer(async (req, res) => {
         S
       );
       const shopZ = one('SELECT * FROM users WHERE id=?', S) || u;
+      const saleLines = all(
+        `SELECT m.qty, m.price, m.paid, m.doc_no, m.pay_method,
+                p.name AS product_name,
+                COALESCE(
+                  (SELECT name FROM users WHERE id=m.cashier_id),
+                  (SELECT u2.name FROM shifts s LEFT JOIN users u2 ON u2.id=s.cashier_id WHERE s.id=m.shift_id),
+                  ''
+                ) AS cashier_name
+         FROM movements m
+         LEFT JOIN products p ON p.id=m.product_id
+         WHERE m.user_id=? AND m.kind='sale' AND m.shift_id=? AND m.product_id IS NOT NULL
+         ORDER BY m.id`,
+        S,
+        shift.id
+      ).map(row => ({
+        product: row.product_name || '—',
+        qty: row.qty,
+        price: row.price,
+        total: row.qty * row.price,
+        paid: row.paid,
+        doc_no: row.doc_no || '',
+        pay_method: row.pay_method || '',
+        cashier: row.cashier_name || ''
+      }));
+      let cashierName = '';
+      if (shift.cashier_id) {
+        cashierName = one('SELECT name FROM users WHERE id=?', shift.cashier_id)?.name || '';
+      }
       const zReport = {
         shift_id: shift.id,
         shop: shopZ.name,
+        cashier: cashierName,
         fiscal_reg: shopZ.fiscal_reg || '',
         fiscal_serial: shopZ.fiscal_serial || '',
         inn: shopZ.company_inn || '',
@@ -1694,7 +1756,8 @@ const server = http.createServer(async (req, res) => {
         closed_at: new Date().toISOString(),
         ...stats,
         close_cash: closeCash,
-        diff: closeCash - stats.expected_cash
+        diff: closeCash - stats.expected_cash,
+        sale_lines: saleLines
       };
       logAudit(S, u, 'z-report', `shift #${shift.id}`);
       extra = {ok: true, id: shift.id, stats: zReport, z_report: zReport};
@@ -1843,9 +1906,10 @@ const server = http.createServer(async (req, res) => {
           const note = discount
             ? `Cart · −${(discount / 100).toFixed(2)} · ${payMethod}${wh === 2 ? ' · WH2' : ''}${ptsTag}`
             : `Cart · ${payMethod}${wh === 2 ? ' · WH2' : ''}${ptsTag}`;
+          const saleCashierId = shift?.cashier_id || u.id || null;
           const r = run(
-            `INSERT INTO movements(user_id,product_id,customer_id,kind,qty,price,cost,paid,note,date,batch,doc_no,shift_id,pay_method,fiscal_no)
-             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            `INSERT INTO movements(user_id,product_id,customer_id,kind,qty,price,cost,paid,note,date,batch,doc_no,shift_id,pay_method,fiscal_no,cashier_id)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             S,
             row.p.id,
             customerId,
@@ -1860,7 +1924,8 @@ const server = http.createServer(async (req, res) => {
             docNo,
             shift?.id || null,
             payMethod,
-            fiscalNo
+            fiscalNo,
+            saleCashierId
           );
           ids.push(Number(r.lastInsertRowid));
         });

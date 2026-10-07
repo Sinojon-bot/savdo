@@ -1,4 +1,4 @@
-const CACHE = 'savdo-app-v35';
+const CACHE = 'savdo-app-v36';
 const ASSETS = [
   '/',
   '/index.html',

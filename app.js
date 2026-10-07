@@ -68,6 +68,9 @@ function can(perm){
   return state.user.role!=='cashier';
 }
 function isAdminUser(){return can('settings')||can('staff')||(isCompany()&&can('shops'))||(state?.user&&state.user.role!=='cashier')}
+function isDirectorUser(){
+  return !!(state?.user?.is_director);
+}
 function unitLabel(u){return t(u==='kg'?'unit_kg':u==='l'?'unit_l':'unit_pcs')}
 function permChecksHtml(selected){
   const set=new Set(selected||[]);
@@ -559,12 +562,13 @@ function auth(){
     </section>
     <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
       <h2>${authMode==='login'?t('welcome'):(mode==='company'?t('mode_company'):t('create_shop'))}</h2>
-      <div class="sub">${pinForm?t('pin_hint'):authMode==='login'?t('login_hint'):t('register_hint')}</div>
+      <div class="sub">${pinForm?t('email_pin_hint'):authMode==='login'?t('login_hint'):t('register_hint')}</div>
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||location.origin)}" placeholder="https://savdo.example.com" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
         ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}"></label>`:''}
         ${pinForm
-          ?`<label>${t('pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>`
+          ?`<label>Email<input name="email" type="email" required autocomplete="username"></label>
+        <label>${t('pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>`
           :`<label>Email<input name="email" type="email" required autocomplete="email"></label>
         <label>${t('password')}<input name="password" type="password" minlength="8" required autocomplete="${authMode==='login'?'current-password':'new-password'}" placeholder="${t('password_ph')}"></label>`}
         <div class="error" id="authError"></div>
@@ -603,7 +607,7 @@ const navs=()=>{
     ['suppliers','▣',t('nav_suppliers'),()=>can('suppliers')],
     ['cashbook','◎',t('nav_cashbook'),()=>can('cashbook')],
     ['analyze','★',t('nav_analyze'),()=>can('analyze')],
-    ['reports','▥',t('nav_reports'),()=>can('reports')],
+    ['reports','▥',t('nav_reports'),()=>isDirectorUser()&&can('reports')],
     ['accounting','Σ',t('nav_accounting'),()=>can('accounting')&&modeHas('accounting')],
     ['central','◈',t('nav_central'),()=>can('shops')&&modeHas('central')],
     ['audit','☰',t('nav_audit'),()=>can('audit')&&modeHas('audit')],
@@ -1007,8 +1011,10 @@ function openCashMove(kind){
 }
 async function closeShiftDialog(){
   const st=state.shift_stats||{};
+  const who=state.shift?.cashier_name?`${t('cashier')}: <b>${esc(state.shift.cashier_name)}</b><br>`:'';
   showModal(t('z_report'),
     `<div class="wide hint" style="margin-top:0">
+      ${who}
       ${t('cash_sales')}: <b>${cash(st.cash_sales||0)}</b><br>
       ${t('card_sales')}: <b>${cash(st.card_sales||0)}</b><br>
       ${t('transfer_sales')}: <b>${cash(st.transfer_sales||0)}</b><br>
@@ -1024,11 +1030,39 @@ async function closeShiftDialog(){
     async b=>{
       const r=await api('shift/close',b);
       const diff=r.stats?.diff||0;
+      const lines=r.stats?.sale_lines||r.z_report?.sale_lines||[];
       toast(`${t('shift_closed_ok')} · ${t('shift_diff')}: ${cash(diff)}`);
+      if(lines.length)showShiftSaleReport(r.stats||r.z_report||{},lines);
       return r;
     }
   );
 }
+function showShiftSaleReport(z,lines){
+  const rows=lines.map(l=>`<tr>
+    <td>${esc(l.cashier||z.cashier||'—')}</td>
+    <td>${esc(l.product)}</td>
+    <td style="text-align:right">${l.qty}</td>
+    <td style="text-align:right">${cash(l.total||0)}</td>
+    <td>${esc(l.doc_no||'')}</td>
+  </tr>`).join('');
+  showModal(t('shift_sales_by_cashier'),
+    `<div class="wide" style="max-height:360px;overflow:auto;margin:0">
+      <p style="margin:0 0 8px;color:var(--muted);font-size:13px">${esc(z.cashier?t('cashier')+': '+z.cashier:'')}</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr>
+          <th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)">${t('cashier')}</th>
+          <th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)">${t('product')}</th>
+          <th style="text-align:right;padding:6px 4px;border-bottom:1px solid var(--line)">${t('qty')}</th>
+          <th style="text-align:right;padding:6px 4px;border-bottom:1px solid var(--line)">${t('summary')}</th>
+          <th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--line)">${t('doc_no')}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`,
+    async()=>({ok:true})
+  );
+}
+window.showShiftSaleReport=showShiftSaleReport;
 function openDiscount(){
   const {sum}=cartTotals();
   showModal(t('discount'),
@@ -1656,13 +1690,13 @@ function settingsPage(){
       <label class="wide">${t('remote_url')}<input id="remoteUrlInput" value="${esc((hubInfo&&hubInfo.remoteUrl)||'')}" placeholder="https://….trycloudflare.com" maxlength="200"></label>
     </div>
     <div class="acts" style="margin-bottom:22px">
-      <button type="button" class="primary" onclick="saveRemoteUrl()">${t('remote_save')}</button>
+      ${isDirectorUser()?`<button type="button" class="primary" onclick="saveRemoteUrl()">${t('remote_save')}</button>
+      <button type="button" class="outline" onclick="clearRemoteUrl()">${t('remote_clear')}</button>`:''}
       <button type="button" class="outline" onclick="copyRemoteUrl()">${t('remote_copy')}</button>
-      <button type="button" class="outline" onclick="clearRemoteUrl()">${t('remote_clear')}</button>
     </div>
     <h2 style="margin:0 0 8px;font-family:var(--display)">${t('shop')}</h2>
     <p style="margin:0 0 16px;color:var(--muted);font-size:14px">${t('shop_settings')}</p>
-    ${can('settings')?`<form id="settingsForm">
+    ${isDirectorUser()?`<form id="settingsForm">
       <div class="formgrid">
         <label class="wide">${t('shop_name')}<input name="name" value="${esc(state.user.name)}" required></label>
         <label>${t('currency')}<select name="currency">${['TJS','USD','EUR','RUB'].map(c=>`<option ${c===state.user.currency?'selected':''}>${c}</option>`).join('')}</select></label>
@@ -1731,7 +1765,7 @@ function settingsPage(){
       </div>
       <div class="error" id="settingsError"></div>
       <button class="primary">${t('save')}</button>
-    </form>`:`<div class="hint">${t('no_access')}</div>`}
+    </form>`:`<div class="hint">${t('director_only')}</div>`}
     ${can('shops')&&modeHas('shops')?`<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--line)">
       <h2 style="margin:0 0 8px;font-family:var(--display);font-size:18px">${t('branches')}</h2>
       <div class="acts" style="margin-bottom:12px"><button class="primary" type="button" onclick="openBranch()">${t('add_branch')}</button></div>

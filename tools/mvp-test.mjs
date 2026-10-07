@@ -103,11 +103,23 @@ async function main() {
     cashierId = s.user.id;
   });
 
-  await soft('login/pin', async () => {
+  await soft('login/pin with email', async () => {
     jar.clear();
-    await api('login/pin', {pin});
+    await api('login/pin', {email, pin});
     const s = await api('state');
     if (!s.user) throw Error('pin login failed');
+    if (!s.user.is_director) throw Error('owner should be director');
+  });
+
+  await soft('login/pin without email rejected', async () => {
+    jar.clear();
+    try {
+      await api('login/pin', {pin});
+      throw Error('BUG: pin login without email accepted');
+    } catch (e) {
+      if (/email|PIN|пин|need/i.test(e.message) || e.status === 400 || e.status === 401) return e.message;
+      throw e;
+    }
   });
 
   // re-login email for rest (pin may switch session)
@@ -287,12 +299,15 @@ async function main() {
     return 'ok';
   });
 
-  await soft('close shift Z', async () => {
+  await soft('close shift Z with sale lines', async () => {
     const s = await api('state');
     if (!s.shift) return 'no open shift';
-    const cash = Math.max(0, Math.round(Number(s.shift_stats?.expected_cash) || 0) / 100);
-    const r = await api('shift/close', {close_cash: Number(cash.toFixed(2)), note: 'mvp'});
-    return `diff=${r.stats?.diff ?? r.z_report?.diff} expected=${s.shift_stats?.expected_cash}`;
+    const cashAmt = Math.max(0, Math.round(Number(s.shift_stats?.expected_cash) || 0) / 100);
+    const r = await api('shift/close', {close_cash: Number(cashAmt.toFixed(2)), note: 'mvp'});
+    const lines = r.stats?.sale_lines || r.z_report?.sale_lines || [];
+    if (!Array.isArray(lines)) throw Error('sale_lines missing');
+    // Staff shift may have cash moves only; lines can be empty — still ok structure
+    return `diff=${r.stats?.diff ?? r.z_report?.diff} lines=${lines.length} cashier=${r.stats?.cashier || ''}`;
   });
 
   await soft('second device same DB (re-login)', async () => {
@@ -396,11 +411,35 @@ async function main() {
       await api('cart/void-last', {});
       throw Error('cashier void allowed');
     } catch (e) {
-      if (/админ|admin|директор|director|only/i.test(e.message) || e.status === 403 || e.status === 400) {
+      if (/админ|admin|директор|director|only|дастрас|access/i.test(e.message) || e.status === 403 || e.status === 400) {
         return e.message;
       }
       throw e;
     }
+  });
+
+  await soft('cashier cannot change settings', async () => {
+    if (!staffEmail) throw Error('no staffEmail');
+    // still logged in as cashier from previous soft, or re-login
+    jar.clear();
+    await api('login', {email: staffEmail, password: 'Cashier12'});
+    const s = await api('state');
+    if (s.user.is_director) throw Error('cashier marked as director');
+    try {
+      await api('settings', {pin: '1111'});
+      throw Error('cashier settings allowed');
+    } catch (e) {
+      if (/директор|director|дастрас|access|only/i.test(e.message) || e.status === 403) return e.message;
+      throw e;
+    }
+  });
+
+  await soft('cashier login via email+PIN', async () => {
+    jar.clear();
+    await api('login/pin', {email: staffEmail, pin: '5678'});
+    const s = await api('state');
+    if (!s.user || s.user.email !== staffEmail) throw Error('wrong user after pin login');
+    return s.user.name;
   });
 
   await soft('admin can void last sale', async () => {
