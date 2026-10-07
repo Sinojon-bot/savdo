@@ -87,8 +87,9 @@ function sellP(p){
   const promo=Number(p.promo_price)||0;if(promo>0)return promo;
   return Number(p.price)||0;
 }
-function isAppUnlocked(){return sessionStorage.getItem('savdo_app_unlock')==='1'}
-function lockApp(){sessionStorage.removeItem('savdo_app_unlock')}
+let appUnlocked=false; // resets every time the app page is opened
+function isAppUnlocked(){return appUnlocked}
+function lockApp(){appUnlocked=false}
 function showAppUnlock(){
   hideSplash();
   document.querySelector('#app').innerHTML=`
@@ -96,7 +97,7 @@ function showAppUnlock(){
     <h2>${t('app_unlock_title')}</h2>
     <div class="sub">${t('app_unlock_hint')}</div>
     <form id="unlockForm">
-      <label>${t('app_unlock_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code"></label>
+      <label>${t('app_unlock_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" autofocus></label>
       <div class="error" id="unlockError"></div>
       <button class="primary" type="submit">${t('app_unlock_btn')}</button>
     </form>
@@ -107,7 +108,7 @@ function showAppUnlock(){
     try{
       const pin=String(new FormData(e.target).get('pin')||'').trim();
       await api('app-unlock',{pin});
-      sessionStorage.setItem('savdo_app_unlock','1');
+      appUnlocked=true;
       await load();
     }catch(err){
       document.querySelector('#unlockError').textContent=err.message;
