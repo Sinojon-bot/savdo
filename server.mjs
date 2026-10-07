@@ -304,6 +304,16 @@ function findUserByLoginKeys(keys) {
     const u = one(`SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`, key);
     if (u) return u;
   }
+  // Legacy rows: phone stored without p: prefix or with odd zeros/992.
+  const want = keys.map(k => normalizePhone(String(k).replace(/^p:/, ''))).find(Boolean);
+  if (!want) return null;
+  const rows = all(`SELECT * FROM users WHERE IFNULL(role,'')!='branch' AND email LIKE 'p:%'`);
+  for (const u of rows) {
+    const got = normalizePhone(String(u.email || '').replace(/^p:/, ''));
+    if (got && got === want) return u;
+  }
+  const bare = one(`SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`, want);
+  if (bare) return bare;
   return null;
 }
 function findUserByLogin(raw) {
@@ -2730,7 +2740,7 @@ const server = http.createServer(async (req, res) => {
       const loginKeys = loginKeysFromBody(b);
       const loginKey = loginKeys[0] || '';
       const name = String(b.name || '').trim();
-      const pin = String(b.pin || b.password || '').trim();
+      const pin = String(b.pin || b.password || '').replace(/\D/g, '');
       if (!loginKey || !name) throw Error(te(L, 'need_phone'));
       if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'pin_need_staff'));
       if (findUserByLoginKeys(loginKeys)) throw Error(te(L, 'phone_used'));

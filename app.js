@@ -160,6 +160,16 @@ function needsHubField(){
   return isNativeShell() || !isPublicCloud();
 }
 function hubBase(){
+  // Opened on the cloud site (Render) → ALWAYS this site. Old localStorage hub
+  // (localhost / LAN) was sending PC API to another DB while iPhone used Render.
+  if(isPublicCloud()){
+    try{
+      const saved=String(localStorage.getItem(HUB_KEY)||'').trim().replace(/\/$/,'');
+      const here=String(location.origin||'').replace(/\/$/,'');
+      if(saved&&here&&saved!==here)localStorage.removeItem(HUB_KEY);
+    }catch{}
+    return location.origin;
+  }
   const saved=String(localStorage.getItem(HUB_KEY)||'').trim().replace(/\/$/,'');
   if(saved)return saved;
   // Capacitor / offline install: talk to cloud by default (iPhone & Android).
@@ -170,8 +180,16 @@ function setHubBase(url){
   const u=String(url||'').trim().replace(/\/$/,'');
   if(!u){localStorage.removeItem(HUB_KEY);return ''}
   if(!/^https?:\/\//i.test(u))throw Error(t('bad_hub_url'));
+  // Never pin a different hub while browsing the public cloud site.
+  if(isPublicCloud()){
+    localStorage.removeItem(HUB_KEY);
+    return location.origin;
+  }
   localStorage.setItem(HUB_KEY,u);
   return u;
+}
+function apiHostLabel(){
+  try{return String(hubBase()||location.origin||'').replace(/^https?:\/\//i,'').replace(/\/$/,'')}catch{return ''}
 }
 function apiUrl(path){return hubBase().replace(/\/$/,'')+'/api/'+String(path||'').replace(/^\//,'')}
 function sessionToken(){return String(localStorage.getItem(TOKEN_KEY)||'').trim()}
@@ -1881,6 +1899,7 @@ function settingsPage(){
     </div>`:''}
     ${can('staff')?`<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--line)">
       <h2 style="margin:0 0 8px;font-family:var(--display);font-size:18px">${t('staff')}</h2>
+      <p style="margin:0 0 12px;padding:10px 12px;border-radius:12px;background:var(--mint);color:var(--forest);font-size:13px;line-height:1.4">${t('staff_same_server')}: <b>${esc(apiHostLabel()||'—')}</b></p>
       <div class="acts" style="margin-bottom:12px"><button class="primary" type="button" onclick="openStaff()">${t('add_staff')}</button></div>
       ${(state.staff||[]).length?`<div class="tablewrap"><table><thead><tr><th>${t('name')}</th><th>${t('phone')}</th><th>${t('role')}</th>${isCompany()?`<th>${t('permissions')}</th>`:''}<th></th></tr></thead>
       <tbody>${state.staff.map(st=>`<tr>
@@ -2592,12 +2611,18 @@ function openTransfer(){
 function openStaff(){
   showModal(t('add_staff'),
     field(t('name'),'name','text','',true)
-    +`<label class="wide">${t('phone')}<input name="phone" type="tel" inputmode="tel" required placeholder="900111222" maxlength="20"></label>`
+    +`<label class="wide">${t('phone')}<input name="phone" type="tel" inputmode="numeric" required placeholder="900111222" maxlength="20" autocomplete="tel"></label>`
     +`<label>${t('role')}<select name="role"><option value="cashier">${t('role_cashier')}</option><option value="admin">${t('role_admin')}</option></select></label>`
-    +field(t('app_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"')
-    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_give_hint')}</p>`
+    +field(t('app_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" autocomplete="new-password"')
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_give_hint')}<br><b>${t('staff_same_server')}: ${esc(apiHostLabel())}</b></p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(['kassa','shift'])}</div>`:''),
     b=>{
+      b.phone=String(b.phone||'').replace(/\D/g,'');
+      if(b.phone.startsWith('992')&&b.phone.length>9)b.phone=b.phone.slice(3);
+      b.phone=b.phone.replace(/^0+/,'');
+      b.pin=String(b.pin||b.password||'').replace(/\D/g,'');
+      if(b.phone.length!==9)throw Error(t('need_phone'));
+      if(!/^\d{4,8}$/.test(b.pin))throw Error(t('bad_pin')||t('pin_hint'));
       if(isCompany())b.permissions=readPermsFromBody(b);
       else b.permissions=b.role==='admin'?PERM_KEYS.filter(p=>!COMPANY_ONLY.has(p)):['kassa','shift'];
       return api('staff',b);
