@@ -261,7 +261,7 @@ function verify(p, h) {
   return timingSafeEqual(Buffer.from(v, 'hex'), scryptSync(p, s, 64));
 }
 /**
- * Phone → canonical 9-digit local (TJ): 9001112233
+ * Phone → canonical 9-digit TJ mobile: 9001112233
  * Accepts: 9001112233, +992 900 111 2233, 9929001112233, 09001112233
  */
 function normalizePhone(raw) {
@@ -270,15 +270,22 @@ function normalizePhone(raw) {
   if (d.startsWith('00')) d = d.slice(2);
   if (d.startsWith('992')) d = d.slice(3);
   d = d.replace(/^0+/, '');
-  if (d.length > 9) d = d.slice(-9);
-  if (d.length !== 9) return '';
-  return d;
+  // Exactly 9 digits (e.g. 90xxxxxxx / 91xxxxxxx)
+  if (d.length === 9) return d;
+  return '';
 }
 function loginKeysFromBody(b) {
   const phone = normalizePhone(b.phone || b.login || '');
+  const rawDigits = String(b.phone || b.login || '').replace(/\D/g, '');
   if (phone) {
     // Canonical + legacy forms that may already be in DB
-    return [...new Set(['p:' + phone, 'p:992' + phone, 'p:0' + phone])];
+    const keys = ['p:' + phone, 'p:992' + phone, 'p:0' + phone];
+    if (rawDigits && rawDigits !== phone) keys.push('p:' + rawDigits);
+    return [...new Set(keys)];
+  }
+  // Fallback: raw digits as stored before normalize fix
+  if (rawDigits.length >= 9 && rawDigits.length <= 15) {
+    return ['p:' + rawDigits];
   }
   const email = String(b.email || '').trim().toLowerCase();
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return [email];
