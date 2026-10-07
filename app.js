@@ -82,8 +82,38 @@ function readPermsFromBody(b){
 }
 function sellP(p){
   if(cartPrices[p.id]!=null)return Number(cartPrices[p.id])||0;
+  // Sale price is entered in cart; catalog price is optional legacy.
   if(cartWholesale){const w=Number(p.wholesale_price)||0;if(w>0)return w}
-  const promo=Number(p.promo_price)||0;return promo>0?promo:p.price;
+  const promo=Number(p.promo_price)||0;if(promo>0)return promo;
+  return Number(p.price)||0;
+}
+function isAppUnlocked(){return sessionStorage.getItem('savdo_app_unlock')==='1'}
+function lockApp(){sessionStorage.removeItem('savdo_app_unlock')}
+function showAppUnlock(){
+  hideSplash();
+  document.querySelector('#app').innerHTML=`
+  <div class="auth"><section class="auth-form"><div class="auth-box">
+    <h2>${t('app_unlock_title')}</h2>
+    <div class="sub">${t('app_unlock_hint')}</div>
+    <form id="unlockForm">
+      <label>${t('app_unlock_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code"></label>
+      <div class="error" id="unlockError"></div>
+      <button class="primary" type="submit">${t('app_unlock_btn')}</button>
+    </form>
+  </div></section></div>`;
+  document.querySelector('#unlockForm').onsubmit=async e=>{
+    e.preventDefault();
+    const btn=e.target.querySelector('.primary');btn.disabled=true;
+    try{
+      const pin=String(new FormData(e.target).get('pin')||'').trim();
+      await api('app-unlock',{pin});
+      sessionStorage.setItem('savdo_app_unlock','1');
+      await load();
+    }catch(err){
+      document.querySelector('#unlockError').textContent=err.message;
+      btn.disabled=false;
+    }
+  };
 }
 function whStock(p,wh=cartWarehouse){return Number(wh)===2?(Number(p.stock2)||0):p.stock}
 function whName(n){
@@ -415,6 +445,10 @@ async function load(){
           await load();
         }catch(e){toast(e.message)}
       });
+      return;
+    }
+    if(state.user.has_pin&&!isAppUnlocked()&&!state._offline){
+      showAppUnlock();
       return;
     }
     setDraftMode(state.user.biz_mode);
@@ -1073,6 +1107,7 @@ function addToCart(id){
   if(cur+1>avail){toast(t('over_stock'));return}
   cart[id]=cur+1;
   render();
+  if(cartPrices[id]==null)editCartPrice(id);
 }
 function cartSet(id,qty){
   const p=state.products.find(x=>x.id===Number(id));
@@ -1085,14 +1120,14 @@ function cartClear(){cart={};cartPrices={};render()}
 function editCartPrice(id){
   const p=state.products.find(x=>x.id===Number(id));
   if(!p)return;
-  const cur=(sellP(p)/100).toFixed(2);
+  const cur=cartPrices[p.id]!=null?(cartPrices[p.id]/100).toFixed(2):(sellP(p)?(sellP(p)/100).toFixed(2):'');
   showModal(t('edit_sale_price'),
-    `<p class="wide" style="margin:0 0 8px;color:var(--muted);font-size:13px">${esc(p.name)} · ${t('catalog_price')}: ${cash(p.price)}</p>`
-    +field(t('sell_price'),'price','number',cur,true,'required min="0" step="0.01"')
+    `<p class="wide" style="margin:0 0 8px;color:var(--muted);font-size:13px">${esc(p.name)} · ${t('cost')}: ${cash(p.cost)}</p>`
+    +field(t('sell_price'),'price','number',cur,true,'required min="0.01" step="0.01"')
     +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('sale_price_hint')}</p>`,
     async b=>{
       const v=Number(b.price);
-      if(!(v>=0))throw Error(t('err'));
+      if(!(v>0))throw Error(t('need_sale_price'));
       cartPrices[p.id]=Math.round(v*100);
       return{ok:true};
     }
@@ -1106,8 +1141,7 @@ function checkoutPayload(lines,pay,extra={}){
     wholesale:cartWholesale?1:0,
     send_telegram:sendTgReceipt?1:0,
     items:lines.map(l=>{
-      const row={product:l.p.id,qty:l.qty};
-      if(cartPrices[l.p.id]!=null)row.price=cartPrices[l.p.id]/100;
+      const row={product:l.p.id,qty:l.qty,price:sellP(l.p)/100};
       return row;
     }),
     ...extra
@@ -1139,6 +1173,8 @@ function useMaxPoints(){
 async function checkoutCart(pay='cash'){
   const {lines,count,payable}=cartTotals();
   if(!lines.length){toast(t('cart_empty'));return}
+  const missing=lines.find(l=>!(sellP(l.p)>0));
+  if(missing){toast(t('need_sale_price')+': '+missing.p.name);editCartPrice(missing.p.id);return}
   if(pay==='cash'){
     showModal(t('choose_pay'),
       `<p class="wide" style="margin:0 0 12px;color:var(--muted);font-size:13px">${count} ${t('pcs')} · ${cash(payable)} · ${esc(whName(cartWarehouse))}</p>
@@ -1256,13 +1292,12 @@ function kassaPage(s){
           const avail=whStock(p);
           const low=isLow(p);
           const ex=expiryStatus(p);
-          const price=sellP(p);
-          const promo=Number(p.promo_price)>0;
+          const inPrice=cartPrices[p.id]!=null?cartPrices[p.id]:null;
           return `<button class="pbtn ${avail<=0?'out':''} ${low?'low':''}" onclick="addToCart(${p.id})" ${avail<=0?'disabled':''}>
             ${productPhoto(p)}
             <b>${esc(p.name)}</b>
             <small>${esc(p.category)} · ${avail} ${unitLabel(p.unit)}${inCart?' · '+t('in_cart',{n:inCart}):''}${low?' · '+t('low_tag'):''}${ex==='expired'?' · '+t('expired'):ex==='soon'?' · '+t('expiry_soon'):''}</small>
-            <div class="price">${cash(price)}${promo?` <span style="text-decoration:line-through;opacity:.55;font-size:12px">${cash(p.price)}</span>`:''}</div>
+            <div class="price">${inPrice!=null?cash(inPrice):`<span style="opacity:.7;font-size:12px">${t('cost')}: ${cash(p.cost)}</span>`}</div>
           </button>`;
         }).join('')||`<div class="empty"><p>${t('empty_cat')}</p></div>`}
       </div>
@@ -1321,7 +1356,7 @@ function kassaPage(s){
       <button class="outline" onclick="printCartDraft()">${t('cart_receipt')}</button>
       ${state.user.printer_enabled?`<button class="outline" onclick="printThermalDraft()">${t('print_thermal')}</button>`:''}
       <button class="outline" onclick="openLastPartialReturn()">${t('partial_return')}</button>
-      ${can('void')?`<button class="outline" onclick="voidLastCart()">${t('void_last')}</button>`:''}
+      ${isAdminUser()?`<button class="outline" onclick="voidLastCart()">${t('void_last')}</button>`:''}
       <button class="outline" onclick="openMove('receipt')">${t('plus_receipt')}</button>
       <button class="outline" onclick="openMove('expense')">${t('plus_expense')}</button>
       <button class="outline" onclick="openMove('writeoff')">${t('plus_writeoff')}</button>
@@ -1350,14 +1385,13 @@ function stockPage(){
       ${can('import')?`<label class="outline" style="display:inline-flex;align-items:center;cursor:pointer;margin:0" title="${t('import_hint')}">${t('import_csv')}<input id="importCsvFile" type="file" accept=".csv,text/csv" hidden></label>`:''}
     </div>
     ${list.length?`<div class="tablewrap"><table>
-      <thead><tr><th>${t('product')}</th><th>${t('price')}</th><th>${esc(whName(1))}</th><th>${esc(whName(2))}</th><th>${t('status')}</th><th></th></tr></thead>
+      <thead><tr><th>${t('product')}</th><th>${t('cost')}</th><th>${esc(whName(1))}</th><th>${esc(whName(2))}</th><th>${t('status')}</th><th></th></tr></thead>
       <tbody>${list.map(p=>{
         const total=p.stock+(Number(p.stock2)||0);
         const ex=expiryStatus(p);
-        const price=sellP(p);
         return `<tr class="${isLow(p)||isOut(p)||ex==='expired'?'low-row':''}">
-        <td><div style="display:flex;gap:10px;align-items:center">${productPhoto(p,'thumb')}<div><b>${esc(p.name)}</b><div style="color:var(--muted);font-size:12px">${esc(p.category)} · ${unitLabel(p.unit)} · ${t('buy_cost',{v:cash(p.cost)})}${p.expiry?' · '+t('expiry')+' '+esc(p.expiry):''}${ex==='soon'?' · '+t('expiry_soon'):ex==='expired'?' · '+t('expired'):''}</div></div></div></td>
-        <td>${cash(price)}${Number(p.promo_price)>0?`<div style="font-size:11px;color:var(--muted);text-decoration:line-through">${cash(p.price)}</div>`:''}</td>
+        <td><div style="display:flex;gap:10px;align-items:center">${productPhoto(p,'thumb')}<div><b>${esc(p.name)}</b><div style="color:var(--muted);font-size:12px">${esc(p.category)} · ${unitLabel(p.unit)}${p.expiry?' · '+t('expiry')+' '+esc(p.expiry):''}${ex==='soon'?' · '+t('expiry_soon'):ex==='expired'?' · '+t('expired'):''}</div></div></div></td>
+        <td>${cash(p.cost)}</td>
         <td><b>${p.stock}</b></td>
         <td><b>${Number(p.stock2)||0}</b></td>
         <td><span class="pill ${total===0?'gray':isLow(p)||ex?'warn':''}">${total===0?t('status_out'):isLow(p)?'≤'+lowLimit():ex==='expired'?t('expired'):t('status_ok')}</span></td>
@@ -1890,16 +1924,16 @@ function openProduct(p){
         <option value="kg" ${p?.unit==='kg'?'selected':''}>${t('unit_kg')}</option>
         <option value="l" ${p?.unit==='l'?'selected':''}>${t('unit_l')}</option>
       </select></label>`
-    +field(t('cost'),'cost','number',p?p.cost/100:'')
-    +field(t('sell_price'),'price','number',p?p.price/100:'')
-    +field(t('promo_price'),'promo_price','number',p&&p.promo_price?p.promo_price/100:'',false,'min="0" step="0.01"')
-    +field(t('wholesale_price'),'wholesale_price','number',p&&p.wholesale_price?p.wholesale_price/100:'',false,'min="0" step="0.01"')
+    +field(t('cost'),'cost','number',p?p.cost/100:'',false,'required min="0" step="0.01"')
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('cost_only_hint')}</p>`
     +`<label>${t('expiry')}<input name="expiry" type="date" value="${esc(p?.expiry||'')}"></label>`
     +(edit?'':field(t('initial_qty'),'stock','number','0',true,'required min="0" step="1"')+dateField()),
     b=>{
       const image=pendingImage===null?(edit?'__keep__':''):pendingImage;
       if(!edit&&!image&&!String(b.name||'').trim())throw Error(t('need_photo_or_name'));
-      return edit?api('product/update',{...b,id:p.id,image}):api('product',{...b,image});
+      // Sell price is entered at checkout only.
+      const body={...b,price:0,promo_price:'',wholesale_price:''};
+      return edit?api('product/update',{...body,id:p.id,image}):api('product',{...body,image});
     }
   );
   document.querySelector('#imgFile').onchange=async e=>{
@@ -1962,8 +1996,8 @@ function openingDebtPanel(kind){
           <td><b>${cash(amt)}</b></td>
           <td>${esc(note||'—')}</td>
           <td class="acts">
-            <button class="outline" onclick='editOpeningDebt(${JSON.stringify(payload)})'>${t('edit')}</button>
-            <button class="danger" onclick="deleteOpeningDebt('${kind}',${m.id})">${t('delete')}</button>
+            ${isAdminUser()?`<button class="outline" onclick='editOpeningDebt(${JSON.stringify(payload)})'>${t('edit')}</button>
+            <button class="danger" onclick="deleteOpeningDebt('${kind}',${m.id})">${t('delete')}</button>`:`<span style="color:var(--muted);font-size:12px">${t('admin_only_short')}</span>`}
           </td>
         </tr>`;
       }).join('')}</tbody>
@@ -2044,6 +2078,10 @@ function openMove(kind,productId){
     fields=`<label class="wide">${t('product')}<select name="product" id="productSelect">${state.products.map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select></label>
       <label>${t('qty')}<input name="qty" type="number" min="1" step="1" value="1" required></label>
       ${field(t('cost'),'cost','number',p.cost/100)}
+      <label class="wide">${t('warehouse')}<select name="warehouse" required>
+        <option value="1">${esc(whName(1))}</option>
+        <option value="2">${esc(whName(2))}</option>
+      </select></label>
       <label class="wide">${t('supplier')}<select name="supplier"><option value="">${t('select_none')}</option>
         ${suppliers.map(s=>`<option value="${s.id}">${esc(s.name)}${s.debt?' · '+fmt(s.debt):''}</option>`).join('')}
       </select></label>
@@ -2433,6 +2471,10 @@ function openQuickBuy(){
   showModal(t('quick_buy'),
     `<label class="wide">${t('supplier')}<select name="supplier"><option value="">${t('select_none')}</option>
       ${suppliers.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></label>
+     <label class="wide">${t('warehouse')}<select name="warehouse" required>
+       <option value="1">${esc(whName(1))}</option>
+       <option value="2">${esc(whName(2))}</option>
+     </select></label>
      <div class="wide invent-list">${state.products.slice(0,40).map(p=>`
        <div class="invent-row">
          <div><b>${esc(p.name)}</b><div class="meta">${cash(p.cost)}</div></div>
@@ -2450,7 +2492,7 @@ function openQuickBuy(){
         if(n>0)items.push({product:p.id,qty:n,cost:p.cost/100});
       }
       if(!items.length)throw Error(t('cart_empty'));
-      return api('quick-receive',{items,supplier:b.supplier,pay:b.pay,date:b.date});
+      return api('quick-receive',{items,supplier:b.supplier,pay:b.pay,date:b.date,warehouse:b.warehouse});
     }
   );
 }

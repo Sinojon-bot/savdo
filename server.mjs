@@ -1324,8 +1324,9 @@ const server = http.createServer(async (req, res) => {
       ) {
         throw Error(te(L, 'bad_stock_qty'));
       }
-      const cost = money(b.cost);
-      const price = money(b.price);
+      const cost = money(b.cost === undefined || b.cost === '' ? 0 : b.cost);
+      // Sell price is set at checkout; catalog may omit it (defaults to 0).
+      const price = (b.price === undefined || b.price === '') ? 0 : money(b.price);
       const promo = b.promo_price === undefined || b.promo_price === '' ? 0 : money(b.promo_price);
       const wholesale = b.wholesale_price === undefined || b.wholesale_price === '' ? 0 : money(b.wholesale_price);
       const unit = ['pcs', 'kg', 'l'].includes(String(b.unit || '')) ? String(b.unit) : 'pcs';
@@ -1390,12 +1391,14 @@ const server = http.createServer(async (req, res) => {
       const wholesale = b.wholesale_price === undefined || b.wholesale_price === '' ? 0 : money(b.wholesale_price);
       const unit = ['pcs', 'kg', 'l'].includes(String(b.unit || '')) ? String(b.unit) : (p.unit || 'pcs');
       const expiry = /^\d{4}-\d{2}-\d{2}$/.test(String(b.expiry || '')) ? String(b.expiry) : '';
+      const nextCost = money(b.cost === undefined || b.cost === '' ? p.cost / 100 : b.cost);
+      const nextPrice = (b.price === undefined || b.price === '') ? (Number(p.price) || 0) : money(b.price);
       run(
         'UPDATE products SET name=?, category=?, cost=?, price=?, image=?, barcode=?, unit=?, promo_price=?, expiry=?, wholesale_price=? WHERE id=? AND user_id=?',
         name.slice(0, 100),
         String(b.category || 'Другое').slice(0, 60),
-        money(b.cost),
-        money(b.price),
+        nextCost,
+        nextPrice,
         nextImage,
         barcode,
         unit,
@@ -1548,6 +1551,7 @@ const server = http.createServer(async (req, res) => {
       logAudit(S, u, 'opening-debt-edit', `#${id}`);
       extra = {ok: true};
     } else if (url.pathname === '/api/customer/opening-debt/delete') {
+      if (!isAdmin(u)) throw Error(te(L, 'admin_only_delete'));
       const id = Number(b.id);
       const m = one(
         `SELECT * FROM movements WHERE id=? AND user_id=? AND kind='sale' AND note LIKE '[opening]%' AND product_id IS NULL`,
@@ -1591,6 +1595,7 @@ const server = http.createServer(async (req, res) => {
       logAudit(S, u, 'opening-debt-edit', `sup #${id}`);
       extra = {ok: true};
     } else if (url.pathname === '/api/supplier/opening-debt/delete') {
+      if (!isAdmin(u)) throw Error(te(L, 'admin_only_delete'));
       const id = Number(b.id);
       const m = one(
         `SELECT * FROM movements WHERE id=? AND user_id=? AND kind='receipt' AND note LIKE '[opening]%' AND product_id IS NULL`,
@@ -1599,6 +1604,19 @@ const server = http.createServer(async (req, res) => {
       if (!m) throw Error(te(L, 'not_found'));
       run('DELETE FROM movements WHERE id=? AND user_id=?', id, S);
       logAudit(S, u, 'opening-debt-del', `sup #${id}`);
+      extra = {ok: true};
+    } else if (url.pathname === '/api/app-unlock') {
+      const pin = String(b.pin || '').trim();
+      if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'bad_pin'));
+      const candidates = all(
+        `SELECT pin FROM users WHERE (id=? OR owner_id=?) AND IFNULL(pin,'')!='' AND IFNULL(role,'')!='branch'`,
+        owner, owner
+      );
+      let ok = false;
+      for (const c of candidates) {
+        try { if (verify(pin, c.pin)) { ok = true; break; } } catch {}
+      }
+      if (!ok) throw Error(te(L, 'bad_pin'));
       extra = {ok: true};
     } else if (url.pathname === '/api/shift/open') {
       if (openShift(S)) throw Error(te(L, 'shift_open_exists'));
@@ -1759,8 +1777,8 @@ const server = http.createServer(async (req, res) => {
           if (!p) throw Error(te(L, 'product_missing'));
           const avail = wh === 2 ? (Number(p.stock2) || 0) : p.stock;
           if (n > avail) throw Error(te(L, 'stock_only', {name: p.name, n: avail}));
-          let unitPrice = sellPrice(p, wholesale);
-          if (rowIn.customPrice != null) unitPrice = rowIn.customPrice;
+          let unitPrice = rowIn.customPrice != null ? rowIn.customPrice : sellPrice(p, wholesale);
+          if (!(unitPrice > 0)) throw Error(te(L, 'need_sale_price') + ': ' + p.name);
           if (Number(shop.block_below_cost) && unitPrice < p.cost) {
             throw Error(te(L, 'below_cost') + ': ' + p.name);
           }
@@ -1875,6 +1893,7 @@ const server = http.createServer(async (req, res) => {
       logAudit(S, u, 'sale', `${created.doc_no || ''} · ${(created.payable / 100).toFixed(2)} · ${created.pay_method || ''}`);
       extra = {ok: true, ...created};
     } else if (url.pathname === '/api/cart/void-last') {
+      if (!isAdmin(u)) throw Error(te(L, 'admin_only_delete'));
       const shop = one('SELECT * FROM users WHERE id=?', S) || u;
       if (shop.void_pin) {
         const pin = String(b.pin || '');
@@ -2094,14 +2113,26 @@ const server = http.createServer(async (req, res) => {
             paid = buyTotal;
           }
           payMethod = pay === 'debt' ? 'debt' : 'cash';
-          const avg = Math.round((p.cost * p.stock + cost * n) / (p.stock + n));
-          run(
-            'UPDATE products SET stock=stock+?, cost=? WHERE id=? AND user_id=?',
-            n,
-            avg,
-            p.id,
-            S
-          );
+          const wh = Number(b.warehouse) === 2 ? 2 : 1;
+          const totalStock = (Number(p.stock) || 0) + (Number(p.stock2) || 0);
+          const avg = Math.round((p.cost * totalStock + cost * n) / Math.max(1, totalStock + n));
+          if (wh === 2) {
+            run(
+              'UPDATE products SET stock2=stock2+?, cost=? WHERE id=? AND user_id=?',
+              n,
+              avg,
+              p.id,
+              S
+            );
+          } else {
+            run(
+              'UPDATE products SET stock=stock+?, cost=? WHERE id=? AND user_id=?',
+              n,
+              avg,
+              p.id,
+              S
+            );
+          }
           if (shift && paid > 0 && payMethod === 'cash') {
             run(
               `INSERT INTO cash_moves(user_id,shift_id,kind,amount,note,date,created_at)
@@ -2594,6 +2625,7 @@ const server = http.createServer(async (req, res) => {
       const shift = openShift(S);
       let pay = String(b.pay || 'debt');
       if (!['cash', 'debt', 'partial'].includes(pay)) pay = 'debt';
+      const wh = Number(b.warehouse) === 2 ? 2 : 1;
       tx(() => {
         for (const it of items) {
           const p = one('SELECT * FROM products WHERE id=? AND user_id=? AND active=1', Number(it.product), S);
@@ -2603,11 +2635,15 @@ const server = http.createServer(async (req, res) => {
           let paid = 0;
           if (pay === 'cash') paid = n * cost;
           else if (pay === 'partial') paid = money(it.paid ?? b.paid ?? 0);
-          run('UPDATE products SET stock=stock+?, cost=? WHERE id=? AND user_id=?', n, cost, p.id, S);
+          if (wh === 2) {
+            run('UPDATE products SET stock2=stock2+?, cost=? WHERE id=? AND user_id=?', n, cost, p.id, S);
+          } else {
+            run('UPDATE products SET stock=stock+?, cost=? WHERE id=? AND user_id=?', n, cost, p.id, S);
+          }
           run(
             `INSERT INTO movements(user_id,product_id,customer_id,kind,qty,price,cost,paid,note,date,shift_id,supplier_id,pay_method)
              VALUES(?,?,NULL,'receipt',?,0,?,?,?,?,?,?,?)`,
-            S, p.id, n, cost, paid, 'Quick receive', d, shift?.id || null, supplierId, pay === 'cash' ? 'cash' : pay
+            S, p.id, n, cost, paid, wh === 2 ? 'Quick receive · WH2' : 'Quick receive', d, shift?.id || null, supplierId, pay === 'cash' ? 'cash' : pay
           );
         }
       });
