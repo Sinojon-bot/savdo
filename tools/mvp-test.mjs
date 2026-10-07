@@ -4,10 +4,10 @@
  * Usage: node tools/mvp-test.mjs [baseUrl]
  */
 const BASE = (process.argv[2] || 'http://127.0.0.1:4173').replace(/\/$/, '');
-const email = `mvp_${Date.now()}@test.local`;
-const password = 'Test1234!';
+const phone = `900${String(Date.now()).slice(-6)}${String(Math.floor(Math.random()*90)+10)}`;
 const pin = '4321';
 const jar = new Map();
+let staffPhone = '';
 
 function parseSetCookie(res) {
   const raw = typeof res.headers.getSetCookie === 'function'
@@ -81,11 +81,11 @@ async function soft(name, fn) {
 
 async function main() {
   console.log(`MVP test → ${BASE}\n`);
-  let state, productId, customerId, supplierId, staffId, cashierId, staffEmail;
+  let state, productId, customerId, supplierId, staffId, cashierId;
 
   await step('register shop', async () => {
-    await api('register', {email, password, name: 'MVP Test Shop', biz_mode: 'shop'});
-    return email;
+    await api('register', {phone, pin, name: 'MVP Test Shop', biz_mode: 'shop'});
+    return phone;
   });
 
   await soft('biz-mode shop', () => api('biz-mode', {biz_mode: 'shop'}));
@@ -93,38 +93,33 @@ async function main() {
   state = await step('state after register', async () => {
     const s = await api('state');
     if (!s.user) throw Error('no user');
-    return `user#${s.user.id} · ${s.user.name}`;
-  });
-
-  await step('set owner PIN via settings', async () => {
-    await api('settings', {pin});
-    const s = await api('state');
-    if (!s.user.has_pin) throw Error('has_pin still false');
+    if (!s.user.has_pin) throw Error('pin not set on register');
+    if (!s.user.is_director) throw Error('owner should be director');
     cashierId = s.user.id;
+    return `user#${s.user.id} · ${s.user.name} · ${s.user.phone||''}`;
   });
 
-  await soft('login/pin with email', async () => {
+  await soft('login phone+pin', async () => {
     jar.clear();
-    await api('login/pin', {email, pin});
+    await api('login', {phone, pin});
     const s = await api('state');
-    if (!s.user) throw Error('pin login failed');
+    if (!s.user) throw Error('login failed');
     if (!s.user.is_director) throw Error('owner should be director');
   });
 
-  await soft('login/pin without email rejected', async () => {
+  await soft('login without phone rejected', async () => {
     jar.clear();
     try {
-      await api('login/pin', {pin});
-      throw Error('BUG: pin login without email accepted');
+      await api('login', {pin});
+      throw Error('BUG: login without phone accepted');
     } catch (e) {
-      if (/email|PIN|пин|need/i.test(e.message) || e.status === 400 || e.status === 401) return e.message;
+      if (/телефон|phone|PIN|пин|need/i.test(e.message) || e.status === 400 || e.status === 401) return e.message;
       throw e;
     }
   });
 
-  // re-login email for rest (pin may switch session)
   jar.clear();
-  await step('re-login email', () => api('login', {email, password}));
+  await step('re-login phone', () => api('login', {phone, pin}));
 
   await step('shift open with PIN', async () => {
     const s = await api('state');
@@ -218,17 +213,16 @@ async function main() {
   });
 
   await step('add staff with unique PIN', async () => {
-    staffEmail = `cashier_${Date.now()}@test.local`;
+    staffPhone = `901${String(Date.now()).slice(-6)}${String(Math.floor(Math.random()*90)+10)}`;
     await api('staff', {
       name: 'MVP Cashier',
-      email: staffEmail,
-      password: 'Cashier12',
+      phone: staffPhone,
       role: 'cashier',
       pin: '5678',
       permissions: ['kassa', 'shift']
     });
     const s = await api('state');
-    const st = (s.staff || []).find(x => x.email === staffEmail);
+    const st = (s.staff || []).find(x => x.phone === staffPhone || x.login === staffPhone);
     if (!st) throw Error('staff not in list');
     if (!st.has_pin) throw Error('staff has_pin false');
     staffId = st.id;
@@ -312,7 +306,7 @@ async function main() {
 
   await soft('second device same DB (re-login)', async () => {
     jar.clear();
-    await api('login', {email, password});
+    await api('login', {phone, pin});
     const s = await api('state');
     const p = s.products.find(x => x.id === productId);
     if (!p) throw Error('product not visible on second session');
@@ -404,9 +398,9 @@ async function main() {
   });
 
   await soft('cashier cannot void last sale', async () => {
-    if (!staffEmail) throw Error('no staffEmail');
+    if (!staffPhone) throw Error('no staffPhone');
     jar.clear();
-    await api('login', {email: staffEmail, password: 'Cashier12'});
+    await api('login', {phone: staffPhone, pin: '5678'});
     try {
       await api('cart/void-last', {});
       throw Error('cashier void allowed');
@@ -419,10 +413,9 @@ async function main() {
   });
 
   await soft('cashier cannot change settings', async () => {
-    if (!staffEmail) throw Error('no staffEmail');
-    // still logged in as cashier from previous soft, or re-login
+    if (!staffPhone) throw Error('no staffPhone');
     jar.clear();
-    await api('login', {email: staffEmail, password: 'Cashier12'});
+    await api('login', {phone: staffPhone, pin: '5678'});
     const s = await api('state');
     if (s.user.is_director) throw Error('cashier marked as director');
     try {
@@ -434,17 +427,19 @@ async function main() {
     }
   });
 
-  await soft('cashier login via email+PIN', async () => {
+  await soft('cashier login via phone+PIN', async () => {
     jar.clear();
-    await api('login/pin', {email: staffEmail, pin: '5678'});
+    await api('login', {phone: staffPhone, pin: '5678'});
     const s = await api('state');
-    if (!s.user || s.user.email !== staffEmail) throw Error('wrong user after pin login');
-    return s.user.name;
+    if (!s.user || (s.user.phone !== staffPhone && s.user.login !== staffPhone)) {
+      throw Error('wrong user after phone login');
+    }
+    return s.user.phone || s.user.login;
   });
 
   await soft('admin can void last sale', async () => {
     jar.clear();
-    await api('login', {email, password});
+    await api('login', {phone, pin});
     const s = await api('state');
     if (!s.shift) await api('shift/open', {open_cash: 0, cashier_id: s.user.id, pin});
     const p = s.products.find(x => x.id === productId) || s.products[0];

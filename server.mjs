@@ -260,6 +260,62 @@ function verify(p, h) {
   const [s, v] = h.split(':');
   return timingSafeEqual(Buffer.from(v, 'hex'), scryptSync(p, s, 64));
 }
+/** Phone digits (9–15) → login key stored in users.email. Legacy emails still work. */
+function normalizePhone(raw) {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (digits.length < 9 || digits.length > 15) return '';
+  return digits;
+}
+function loginKeyFromBody(b) {
+  const phone = normalizePhone(b.phone || b.login || '');
+  if (phone) return 'p:' + phone;
+  const email = String(b.email || '').trim().toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return email;
+  return '';
+}
+function phoneFromLoginKey(key) {
+  const k = String(key || '');
+  if (k.startsWith('p:')) return k.slice(2);
+  return '';
+}
+function findUserByLogin(raw) {
+  const key = loginKeyFromBody(typeof raw === 'string' ? {phone: raw, email: raw} : (raw || {}));
+  if (!key) return null;
+  return one(`SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`, key);
+}
+function shopMemberCount(owner) {
+  return one(
+    `SELECT COUNT(*) AS n FROM users
+     WHERE (id=? OR owner_id=?) AND IFNULL(role,'')!='branch'`,
+    owner,
+    owner
+  ).n || 0;
+}
+function deleteShopAccount(owner) {
+  const ids = all(
+    `SELECT id FROM users WHERE id=? OR owner_id=?`,
+    owner,
+    owner
+  ).map(r => r.id);
+  if (!ids.length) return;
+  const ph = ids.map(() => '?').join(',');
+  tx(() => {
+    run(`DELETE FROM sessions WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM cash_moves WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM shifts WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM payments WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM supplier_payments WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM movements WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM products WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM customers WHERE user_id IN (${ph})`, ...ids);
+    run(`DELETE FROM suppliers WHERE user_id IN (${ph})`, ...ids);
+    try { run(`DELETE FROM journal_entries WHERE user_id IN (${ph})`, ...ids); } catch {}
+    try { run(`DELETE FROM audit_log WHERE user_id IN (${ph})`, ...ids); } catch {}
+    try { run(`DELETE FROM branch_snapshots WHERE owner_id=?`, owner); } catch {}
+    try { run(`DELETE FROM sync_ops WHERE user_id IN (${ph})`, ...ids); } catch {}
+    run(`DELETE FROM users WHERE id IN (${ph})`, ...ids);
+  });
+}
 function today(u) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: u.zone, year: 'numeric', month: '2-digit', day: '2-digit'
@@ -914,52 +970,44 @@ const server = http.createServer(async (req, res) => {
         )
       : null;
 
-    if (req.method === 'POST' && ['/api/register', '/api/login'].includes(url.pathname)) {
-      const email = String(b.email || '').trim().toLowerCase();
-      const password = String(b.password || '');
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 8) {
-        return reply(400, {error: te(L, 'bad_creds')});
-      }
+    if (req.method === 'POST' && ['/api/register', '/api/login', '/api/login/pin'].includes(url.pathname)) {
+      // Login id = phone (short). App password = PIN 4–8 digits (no long password).
+      const loginKey = loginKeyFromBody(b);
+      const pin = String(b.pin || b.password || '').trim();
+      if (!loginKey) return reply(400, {error: te(L, 'need_phone')});
+      if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
+
       if (url.pathname === '/api/register') {
         if (!String(b.name || '').trim()) return reply(400, {error: te(L, 'need_shop')});
-        if (one('SELECT id FROM users WHERE email=?', email)) {
-          return reply(400, {error: te(L, 'email_used')});
+        if (one('SELECT id FROM users WHERE email=?', loginKey)) {
+          return reply(400, {error: te(L, 'phone_used')});
         }
         const mode = b.biz_mode === 'company' ? 'company' : 'shop';
+        const pinHash = hash(pin);
         const r = run(
-          'INSERT INTO users(email,password,name,biz_mode) VALUES(?,?,?,?)',
-          email,
-          hash(password),
+          'INSERT INTO users(email,password,name,biz_mode,pin) VALUES(?,?,?,?,?)',
+          loginKey,
+          pinHash,
           String(b.name).trim().slice(0, 100),
-          mode
+          mode,
+          pinHash
         );
         session(res, Number(r.lastInsertRowid), req);
-      } else {
-        const user = one('SELECT * FROM users WHERE email=?', email);
-        if (!user || !verify(password, user.password)) {
-          return reply(401, {error: te(L, 'bad_login')});
-        }
-        session(res, user.id, req);
+        return reply(200, {ok: true});
       }
-      return reply(200, {ok: true});
-    }
 
-    if (req.method === 'POST' && url.pathname === '/api/login/pin') {
-      // Each person: their email + their own PIN (not a global PIN).
-      const email = String(b.email || '').trim().toLowerCase();
-      const pin = String(b.pin || '').trim();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return reply(400, {error: te(L, 'need_email_pin')});
-      }
-      if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
+      // login / login/pin — same: phone + app PIN
       const user = one(
         `SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`,
-        email
+        loginKey
       );
-      if (!user || !user.pin) return reply(401, {error: te(L, 'bad_pin')});
+      if (!user) return reply(401, {error: te(L, 'bad_login')});
       let ok = false;
-      try { ok = verify(pin, user.pin); } catch { ok = false; }
-      if (!ok) return reply(401, {error: te(L, 'bad_pin')});
+      try {
+        if (user.pin) ok = verify(pin, user.pin);
+        if (!ok && user.password) ok = verify(pin, user.password);
+      } catch { ok = false; }
+      if (!ok) return reply(401, {error: te(L, 'bad_login')});
       session(res, user.id, req);
       return reply(200, {ok: true});
     }
@@ -1071,6 +1119,8 @@ const server = http.createServer(async (req, res) => {
           ).map(st => ({
             id: st.id,
             email: st.email,
+            phone: phoneFromLoginKey(st.email) || '',
+            login: phoneFromLoginKey(st.email) || st.email || '',
             name: st.name,
             role: st.role,
             permissions: [...parsePerms(st)],
@@ -1099,6 +1149,8 @@ const server = http.createServer(async (req, res) => {
           id: u.id,
           name: shop.name,
           email: u.email,
+          phone: phoneFromLoginKey(u.email) || '',
+          login: phoneFromLoginKey(u.email) || u.email || '',
           currency: shop.currency,
           zone: shop.zone,
           low_stock: Math.max(0, Number(shop.low_stock) || 5),
@@ -2311,8 +2363,10 @@ const server = http.createServer(async (req, res) => {
       const pin = String(b.pin || '').trim();
       if (pin) {
         if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'bad_pin'));
-        pinSql += ', pin=?';
-        pinArgs.push(hash(pin));
+        const pinHash = hash(pin);
+        // App login password = same PIN (no long password).
+        pinSql += ', pin=?, password=?';
+        pinArgs.push(pinHash, pinHash);
       }
       const voidPin = String(b.void_pin || '').trim();
       if (voidPin) {
@@ -2630,23 +2684,20 @@ const server = http.createServer(async (req, res) => {
       logAudit(S, u, 'import', `+${created} ~${updated}`);
       extra = {ok: true, created, updated, total: created + updated};
     } else if (url.pathname === '/api/staff') {
-      const email = String(b.email || '').trim().toLowerCase();
-      const password = String(b.password || '');
+      const loginKey = loginKeyFromBody(b);
       const name = String(b.name || '').trim();
-      if (!/[^\s@]+@[^\s@]+\.[^\s@]+/.test(email) || password.length < 8 || !name) {
-        throw Error(te(L, 'bad_creds'));
-      }
-      if (one('SELECT id FROM users WHERE email=?', email)) throw Error(te(L, 'email_used'));
+      const pin = String(b.pin || b.password || '').trim();
+      if (!loginKey || !name) throw Error(te(L, 'need_phone'));
+      if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'pin_need_staff'));
+      if (one('SELECT id FROM users WHERE email=?', loginKey)) throw Error(te(L, 'phone_used'));
       const role = b.role === 'admin' ? 'admin' : 'cashier';
       const shop = one('SELECT * FROM users WHERE id=?', S) || u;
-      const pin = String(b.pin || '').trim();
-      if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'pin_need_staff'));
       const pinHash = hash(pin);
       const permsJson = normalizePermsInput(role, b.permissions);
       run(
         'INSERT INTO users(email,password,name,currency,zone,low_stock,role,owner_id,pin,active_shop_id,permissions) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-        email,
-        hash(password),
+        loginKey,
+        pinHash,
         name.slice(0, 100),
         shop.currency,
         shop.zone,
@@ -2678,8 +2729,9 @@ const server = http.createServer(async (req, res) => {
       const pin = String(b.pin || '').trim();
       if (pin) {
         if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'bad_pin'));
-        pinSql = ', pin=?';
-        pinArgs.push(hash(pin));
+        const pinHash = hash(pin);
+        pinSql = ', pin=?, password=?';
+        pinArgs.push(pinHash, pinHash);
       }
       run(
         `UPDATE users SET name=?, role=?, permissions=?${pinSql} WHERE id=?`,
@@ -2691,6 +2743,21 @@ const server = http.createServer(async (req, res) => {
       );
       logAudit(S, u, 'staff-update', String(st.email));
       extra = {ok: true};
+    } else if (url.pathname === '/api/account/status') {
+      const n = shopMemberCount(owner);
+      extra = {ok: true, members: n, alone: n <= 1, is_director: isDirector(u) ? 1 : 0};
+    } else if (url.pathname === '/api/account/delete') {
+      requireDirector(u, L);
+      const n = shopMemberCount(owner);
+      if (n > 1) throw Error(te(L, 'account_has_members'));
+      deleteShopAccount(owner);
+      res.setHeader(
+        'Set-Cookie',
+        isHttpsReq(req)
+          ? 'savdo_session=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0'
+          : 'savdo_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0'
+      );
+      extra = {ok: true, deleted: true};
     } else if (url.pathname === '/api/quick-receive') {
       const items = Array.isArray(b.items) ? b.items : [];
       if (!items.length) throw Error(te(L, 'cart_empty'));

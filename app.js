@@ -547,7 +547,6 @@ function auth(){
     showModePicker(mode=>{setDraftMode(mode);auth()});
     return;
   }
-  const pinForm=authMode==='login'&&authPinMode;
   const mode=draftMode();
   document.querySelector('#app').innerHTML=`
   <div class="auth">
@@ -562,26 +561,21 @@ function auth(){
     </section>
     <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
       <h2>${authMode==='login'?t('welcome'):(mode==='company'?t('mode_company'):t('create_shop'))}</h2>
-      <div class="sub">${pinForm?t('email_pin_hint'):authMode==='login'?t('login_hint'):t('register_hint')}</div>
+      <div class="sub">${authMode==='login'?t('login_hint'):t('register_hint')}</div>
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||location.origin)}" placeholder="https://savdo.example.com" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
         ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}"></label>`:''}
-        ${pinForm
-          ?`<label>Email<input name="email" type="email" required autocomplete="username"></label>
-        <label>${t('pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>`
-          :`<label>Email<input name="email" type="email" required autocomplete="email"></label>
-        <label>${t('password')}<input name="password" type="password" minlength="8" required autocomplete="${authMode==='login'?'current-password':'new-password'}" placeholder="${t('password_ph')}"></label>`}
+        <label>${t('phone')}<input name="phone" type="tel" inputmode="tel" required autocomplete="username" placeholder="900111222" maxlength="20"></label>
+        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>
         <div class="error" id="authError"></div>
         <button class="primary">${authMode==='login'?t('login'):t('start')}</button>
       </form>
-      ${authMode==='login'?`<button class="switch" id="pinBtn" type="button">${authPinMode?t('email_login'):t('pin_login')}</button>`:''}
       <button class="switch" id="switchBtn">${authMode==='login'?t('new_account'):t('have_account')}</button>
       <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
     </div></section>
   </div>`;
-  document.querySelector('#switchBtn').onclick=()=>{authMode=authMode==='login'?'register':'login';authPinMode=false;auth()};
+  document.querySelector('#switchBtn').onclick=()=>{authMode=authMode==='login'?'register':'login';auth()};
   document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);auth()};
-  document.querySelector('#pinBtn')?.addEventListener('click',()=>{authPinMode=!authPinMode;auth()});
   document.querySelector('#authForm').onsubmit=async e=>{
     e.preventDefault();const btn=e.target.querySelector('.primary');btn.disabled=true;
     try{
@@ -591,8 +585,7 @@ function auth(){
       if(hub)setHubBase(hub);
       if(!hubBase())throw Error(t('need_hub_url'));
       if(authMode==='register')body.biz_mode=draftMode()||'shop';
-      if(pinForm)await api('login/pin',body);
-      else await api(authMode,body);
+      await api(authMode==='register'?'register':'login',body);
       load();
     }catch(err){document.querySelector('#authError').textContent=err.message;btn.disabled=false}
   };
@@ -1728,7 +1721,7 @@ function settingsPage(){
           <input name="require_shift" type="checkbox" value="1" ${state.user.require_shift?'checked':''} style="width:auto">
           ${t('require_shift')}
         </label>
-        <label class="wide">${t('pin')} <small>(${t('pin_hint')})</small><input name="pin" type="password" inputmode="numeric" maxlength="8" placeholder="${state.user.has_pin?'••••':t('pin_hint')}" autocomplete="new-password"></label>
+        <label class="wide">${t('app_pin')} <small>(${t('pin_hint')})</small><input name="pin" type="password" inputmode="numeric" maxlength="8" placeholder="${state.user.has_pin?'••••':t('pin_hint')}" autocomplete="new-password"></label>
         <label class="wide">${t('void_pin')}<input name="void_pin" type="password" inputmode="numeric" maxlength="8" placeholder="${state.user.has_void_pin?'••••':t('pin_hint')}" autocomplete="new-password"></label>
         <label class="wide" style="display:flex;gap:10px;align-items:center">
           <input name="block_below_cost" type="checkbox" value="1" ${state.user.block_below_cost?'checked':''} style="width:auto">
@@ -1781,15 +1774,15 @@ function settingsPage(){
     ${can('staff')?`<div style="margin-top:28px;padding-top:20px;border-top:1px solid var(--line)">
       <h2 style="margin:0 0 8px;font-family:var(--display);font-size:18px">${t('staff')}</h2>
       <div class="acts" style="margin-bottom:12px"><button class="primary" type="button" onclick="openStaff()">${t('add_staff')}</button></div>
-      ${(state.staff||[]).length?`<div class="tablewrap"><table><thead><tr><th>${t('name')}</th><th>Email</th><th>${t('role')}</th>${isCompany()?`<th>${t('permissions')}</th>`:''}<th></th></tr></thead>
+      ${(state.staff||[]).length?`<div class="tablewrap"><table><thead><tr><th>${t('name')}</th><th>${t('phone')}</th><th>${t('role')}</th>${isCompany()?`<th>${t('permissions')}</th>`:''}<th></th></tr></thead>
       <tbody>${state.staff.map(st=>`<tr>
         <td><b>${esc(st.name)}</b>${st.has_pin?'':` · <span style="color:var(--danger);font-size:12px">${t('pin_not_set_short')}</span>`}</td>
-        <td>${esc(st.email)}</td>
+        <td>${esc(st.phone||st.login||st.email||'')}</td>
         <td>${st.role==='cashier'?t('role_cashier'):t('role_admin')}</td>
         ${isCompany()?`<td style="font-size:11px;color:var(--muted)">${esc((st.permissions||[]).slice(0,6).join(', '))}${(st.permissions||[]).length>6?'…':''}</td>`:''}
         <td class="acts">
           <button class="outline" onclick="editStaff(${st.id})">${t('edit')}</button>
-          ${st.id!==undefined&&st.email!==state.user.email&&st.role==='cashier'?`<button class="danger" onclick="deleteStaff(${st.id})">${t('hide')}</button>`:''}
+          ${st.id!==undefined&&st.id!==state.user.id&&st.role==='cashier'?`<button class="danger" onclick="deleteStaff(${st.id})">${t('hide')}</button>`:''}
         </td>
       </tr>`).join('')}</tbody></table></div>`:`<p style="color:var(--muted);font-size:13px">${t('staff')}</p>`}
     </div>`:''}
@@ -2491,10 +2484,9 @@ function openTransfer(){
 function openStaff(){
   showModal(t('add_staff'),
     field(t('name'),'name','text','',true)
-    +`<label class="wide">Email<input name="email" type="email" required></label>`
-    +field(t('staff_pass'),'password','password','',true,'required minlength="8"')
+    +`<label class="wide">${t('phone')}<input name="phone" type="tel" inputmode="tel" required placeholder="900111222" maxlength="20"></label>`
     +`<label>${t('role')}<select name="role"><option value="cashier">${t('role_cashier')}</option><option value="admin">${t('role_admin')}</option></select></label>`
-    +field(t('pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"')
+    +field(t('app_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"')
     +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_pin_hint')}</p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(['kassa','shift'])}</div>`:''),
     b=>{
@@ -2658,7 +2650,22 @@ async function importProductsCsv(e){
   }catch(err){toast(err.message||t('err'))}
   e.target.value='';
 }
-async function logout(){await api('logout',{});needWelcome=true;cart={};auth()}
+async function logout(){
+  try{
+    if(isDirectorUser()){
+      const st=await api('account/status',{});
+      if(st.alone){
+        if(!confirm(t('leave_delete_q')))return;
+        await api('account/delete',{});
+        needWelcome=true;cart={};cartPrices={};auth();
+        return;
+      }
+    }
+  }catch(e){toast(e.message||t('err'));return}
+  await api('logout',{});
+  needWelcome=true;cart={};cartPrices={};auth();
+}
+window.logout=logout;
 async function downloadBackup(){try{const r=await fetch(apiUrl('backup/export'),{credentials:'include'});if(!r.ok)throw Error((await r.json()).error);const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='savdo-backup-'+state.today+'.json';a.click();toast(t('json_ok'))}catch(e){toast(e.message)}}
 async function downloadDbFile(){try{const r=await fetch(apiUrl('backup/file'),{credentials:'include'});if(!r.ok)throw Error((await r.json()).error);const a=document.createElement('a');a.href=URL.createObjectURL(await r.blob());a.download='savdo-'+state.today+'.sqlite';a.click();toast(t('sqlite_ok'))}catch(e){toast(e.message)}}
 async function restoreBackup(e){
