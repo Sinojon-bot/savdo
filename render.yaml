@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: savdo
+    runtime: node
+    plan: free
+    buildCommand: "node -v"
+    startCommand: "node server.mjs"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: PORT
+        value: "4173"

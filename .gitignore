@@ -1,0 +1,11 @@
+data/
+node_modules/
+mobile/node_modules/
+mobile/android/
+mobile/ios/
+mobile/www/
+.DS_Store
+*.log
+.env
+.env.*
+Savdo-download.zip

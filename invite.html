@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="tg">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<title>Savdo</title>
+<meta name="theme-color" content="#1a3c34">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Sora:wght@700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;max-width:100%;overflow-x:hidden;background:#f3f1ea}
+body{
+  min-height:100dvh;font:15px/1.4 Manrope,sans-serif;color:#1c2b28;
+  padding:max(12px,env(safe-area-inset-top)) 12px max(16px,env(safe-area-inset-bottom));
+}
+.wrap{width:100%;max-width:420px;margin:0 auto}
+.head{
+  display:flex;align-items:center;gap:10px;margin-bottom:12px;
+  font-family:Sora,sans-serif;font-size:24px;font-weight:700;color:#1a3c34;
+}
+.mark{
+  width:42px;height:42px;border-radius:12px;display:grid;place-items:center;
+  background:linear-gradient(145deg,#f0c35a,#e2b13c);color:#2a2208;font-size:18px;font-weight:800;
+}
+.card{background:#fffcf7;border:1px solid #e4ddd0;border-radius:20px;overflow:hidden}
+.banner{
+  padding:14px 16px;background:#1a3c34;color:#fff;
+}
+.banner .tag{font-size:11px;font-weight:800;color:#f0c35a}
+.banner h1{margin:8px 0 4px;font-family:Sora,sans-serif;font-size:22px;letter-spacing:-.03em}
+.banner p{margin:0;color:#c5d8d1;font-size:13px}
+.body{padding:14px}
+.row{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:center;padding:10px;border-radius:12px;background:#f3f1ea;margin-bottom:8px}
+.n{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:#1a3c34;color:#f0c35a;font-weight:800;font-size:13px}
+.row b{display:block;font-size:13px}
+.row span{font-size:12px;color:#6a7c76}
+.cta{
+  display:block;width:100%;text-align:center;text-decoration:none;margin-top:4px;
+  padding:14px;min-height:48px;border-radius:14px;font:800 15px Manrope,sans-serif;
+  background:linear-gradient(135deg,#f0c35a,#e2b13c);color:#2a2208;
+}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+.chip{padding:10px;border-radius:12px;background:#fff;border:1px solid #e8e1d4;font-size:11px;color:#6a7c76;line-height:1.3}
+.chip strong{display:block;color:#1c2b28;font-size:12px;margin-bottom:2px}
+.copy{margin-top:10px;width:100%;min-height:44px;border:1px solid #e4ddd0;border-radius:12px;background:#fff;font:700 13px Manrope,sans-serif;color:#1a3c34}
+.foot{margin:10px 0 0;text-align:center;font-size:11px;color:#6a7c76;word-break:break-all}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="head"><span class="mark">S</span>Savdo</div>
+    <div class="card">
+      <div class="banner">
+        <div class="tag">Касса · Анбор · Телефон</div>
+        <h1>Дӯкон дар телефон</h1>
+        <p>Як Wi‑Fi бо компютер — кушоед ва ба экран гузоред.</p>
+      </div>
+      <div class="body">
+        <div class="row"><div class="n">1</div><div><b>Wi‑Fi ҳамон</b><span>Мисли компютер</span></div></div>
+        <div class="row"><div class="n">2</div><div><b>Кушоед</b><span id="host">Savdo</span></div></div>
+        <div class="row"><div class="n">3</div><div><b>Насб ба экран</b><span>Мисли барнома</span></div></div>
+        <a class="cta" id="open" href="/">Кушодани Savdo</a>
+        <div class="grid">
+          <div class="chip"><strong>Android</strong>Chrome → ⋮ → На гл. экран</div>
+          <div class="chip"><strong>iPhone</strong>Safari → Куштир → Домой</div>
+        </div>
+        <button class="copy" type="button" id="copy">Нусха барои WhatsApp</button>
+      </div>
+    </div>
+    <p class="foot" id="url"></p>
+  </div>
+<script>
+var o=location.origin;
+document.getElementById('open').href=o+'/';
+document.getElementById('host').textContent=o.replace(/^https?:\/\//,'');
+document.getElementById('url').textContent=o;
+document.getElementById('copy').onclick=async function(){
+  var m='Savdo\n'+o+'\nAndroid: Chrome → ⋮ → На гл. экран\niPhone: Safari → Поделиться → Домой';
+  try{await navigator.clipboard.writeText(m);this.textContent='Нусха шуд ✓'}catch{prompt('Нусха:',m)}
+  var b=this;setTimeout(function(){b.textContent='Нусха барои WhatsApp'},1500);
+};
+</script>
+</body>
+</html>
