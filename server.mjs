@@ -1266,10 +1266,10 @@ const server = http.createServer(async (req, res) => {
 
     const money = v => {
       const n = Number(v);
-      if (v === undefined || v === '' || !Number.isFinite(n) || n < 0 || n > 10000000) {
+      if (v === undefined || v === '' || !Number.isFinite(n) || n < 0 || n > 100000000) {
         throw Error(te(L, 'bad_amount'));
       }
-      return Math.round(n * 100);
+      return Math.round((n + Number.EPSILON) * 100);
     };
     const qty = v => {
       const n = Number(v);
@@ -1646,7 +1646,8 @@ const server = http.createServer(async (req, res) => {
     } else if (url.pathname === '/api/shift/close') {
       const shift = openShift(S);
       if (!shift) throw Error(te(L, 'shift_needed'));
-      const closeCash = money(b.close_cash ?? 0);
+      // Allow closing even when expected_cash is negative (cash buys/supplier pays).
+      const closeCash = money(Math.max(0, Number(b.close_cash ?? 0)));
       const stats = shiftStats(u, shift);
       run(
         `UPDATE shifts SET status='closed', closed_at=?, close_cash=?, note=? WHERE id=? AND user_id=?`,
@@ -2161,24 +2162,45 @@ const server = http.createServer(async (req, res) => {
     } else if (url.pathname === '/api/settings') {
       const shop = one('SELECT * FROM users WHERE id=?', S) || u;
       const currencies = ['TJS', 'USD', 'EUR', 'RUB'];
-      if (!currencies.includes(b.currency)) throw Error(te(L, 'bad_currency'));
-      new Intl.DateTimeFormat('en', {timeZone: b.zone});
+      const currency = currencies.includes(b.currency) ? b.currency : shop.currency;
+      if (!currencies.includes(currency)) throw Error(te(L, 'bad_currency'));
+      const zone = String(b.zone || shop.zone || 'Asia/Dushanbe');
+      try { new Intl.DateTimeFormat('en', {timeZone: zone}); }
+      catch { throw Error(te(L, 'bad_date')); }
       const has = one('SELECT id FROM movements WHERE user_id=? LIMIT 1', S);
-      if (has && b.currency !== shop.currency) {
+      if (has && currency !== shop.currency) {
         throw Error(te(L, 'currency_locked'));
       }
-      const low = Number(b.low_stock);
+      let low = Number(b.low_stock);
       if (!Number.isInteger(low) || low < 0 || low > 1000000) {
-        throw Error(te(L, 'bad_low'));
+        low = Math.max(0, Number(shop.low_stock) || 5);
       }
       let vat = Number(b.vat_percent);
-      if (!Number.isFinite(vat) || vat < 0 || vat > 100) vat = 0;
-      const block = b.block_below_cost === true || b.block_below_cost === 1 || b.block_below_cost === '1' || b.block_below_cost === 'on' ? 1 : 0;
-      const autoBackup = b.auto_backup === true || b.auto_backup === 1 || b.auto_backup === '1' || b.auto_backup === 'on' ? 1 : 0;
-      const alertLow = b.alert_low === true || b.alert_low === 1 || b.alert_low === '1' || b.alert_low === 'on' ? 1 : 0;
-      const alertExpiry = b.alert_expiry === true || b.alert_expiry === 1 || b.alert_expiry === '1' || b.alert_expiry === 'on' ? 1 : 0;
+      if (!Number.isFinite(vat) || vat < 0 || vat > 100) {
+        vat = Number(shop.vat_percent) || 0;
+      }
+      const hasKey = (k) => Object.prototype.hasOwnProperty.call(b, k);
+      const pickOn = (v, fallback) => {
+        if (v === true || v === 1 || v === '1' || v === 'on') return 1;
+        if (v === false || v === 0 || v === '0' || v === 'off') return 0;
+        return fallback ? 1 : 0;
+      };
+      const block = hasKey('block_below_cost')
+        ? pickOn(b.block_below_cost, false)
+        : (Number(shop.block_below_cost) ? 1 : 0);
+      const autoBackup = hasKey('auto_backup')
+        ? pickOn(b.auto_backup, true)
+        : (Number(shop.auto_backup) !== 0 ? 1 : 0);
+      const alertLow = hasKey('alert_low')
+        ? pickOn(b.alert_low, true)
+        : (Number(shop.alert_low) !== 0 ? 1 : 0);
+      const alertExpiry = hasKey('alert_expiry')
+        ? pickOn(b.alert_expiry, true)
+        : (Number(shop.alert_expiry) !== 0 ? 1 : 0);
       let bonus = Number(b.bonus_percent);
-      if (!Number.isFinite(bonus) || bonus < 0 || bonus > 100) bonus = 0;
+      if (!Number.isFinite(bonus) || bonus < 0 || bonus > 100) {
+        bonus = Number(shop.bonus_percent) || 0;
+      }
       let pinSql = '';
       const pinArgs = [];
       const pin = String(b.pin || '').trim();
@@ -2197,16 +2219,34 @@ const server = http.createServer(async (req, res) => {
         pinSql += ', void_pin=?';
         pinArgs.push('');
       }
-      const printerOn = b.printer_enabled === true || b.printer_enabled === 1 || b.printer_enabled === '1' || b.printer_enabled === 'on' ? 1 : 0;
-      const printerPort = Math.min(65535, Math.max(1, Number(b.printer_port) || 9100));
-      const printerWidth = [32, 42, 48].includes(Number(b.printer_width)) ? Number(b.printer_width) : 32;
-      const requireShift = b.require_shift === true || b.require_shift === 1 || b.require_shift === '1' || b.require_shift === 'on' ? 1 : 0;
-      const fiscalOn = b.fiscal_enabled === true || b.fiscal_enabled === 1 || b.fiscal_enabled === '1' || b.fiscal_enabled === 'on' ? 1 : 0;
-      let lockedUntil = String(b.locked_until || '').trim();
+      const printerOn = hasKey('printer_enabled')
+        ? pickOn(b.printer_enabled, false)
+        : (Number(shop.printer_enabled) ? 1 : 0);
+      const printerPort = Math.min(65535, Math.max(1, Number(b.printer_port) || Number(shop.printer_port) || 9100));
+      const printerWidth = [32, 42, 48].includes(Number(b.printer_width))
+        ? Number(b.printer_width)
+        : ([32, 42, 48].includes(Number(shop.printer_width)) ? Number(shop.printer_width) : 32);
+      const requireShift = hasKey('require_shift')
+        ? pickOn(b.require_shift, true)
+        : (Number(shop.require_shift) !== 0 ? 1 : 0);
+      const fiscalOn = hasKey('fiscal_enabled')
+        ? pickOn(b.fiscal_enabled, false)
+        : (Number(shop.fiscal_enabled) ? 1 : 0);
+      let lockedUntil = hasKey('locked_until')
+        ? String(b.locked_until || '').trim()
+        : String(shop.locked_until || '');
       if (lockedUntil && !/^\d{4}-\d{2}-\d{2}$/.test(lockedUntil)) throw Error(te(L, 'bad_date'));
       if (!lockedUntil) lockedUntil = '';
-      let hubUrl = String(b.hub_url || '').trim().slice(0, 200);
+      let hubUrl = hasKey('hub_url')
+        ? String(b.hub_url || '').trim().slice(0, 200)
+        : String(shop.hub_url || '');
       if (hubUrl && !/^https?:\/\//i.test(hubUrl)) throw Error(te(L, 'bad_hub'));
+      const hubToken = hasKey('hub_token')
+        ? String(b.hub_token || '').trim().slice(0, 80)
+        : String(shop.hub_token || '');
+      const bizMode = b.biz_mode === 'company' || b.biz_mode === 'shop'
+        ? b.biz_mode
+        : (shop.biz_mode === 'company' ? 'company' : 'shop');
       run(
         `UPDATE users SET name=?, currency=?, zone=?, low_stock=?, vat_percent=?,
          block_below_cost=?, telegram_token=?, telegram_chat=?, wh1_name=?, wh2_name=?,
@@ -2216,35 +2256,35 @@ const server = http.createServer(async (req, res) => {
          locked_until=?, require_shift=?, fiscal_enabled=?, fiscal_reg=?, fiscal_serial=?,
          hub_url=?, hub_token=?, biz_mode=?${pinSql} WHERE id=?`,
         String(b.name || shop.name).slice(0, 100),
-        b.currency,
-        b.zone,
+        currency,
+        zone,
         low,
         vat,
         block,
-        String(b.telegram_token || '').trim().slice(0, 200),
-        String(b.telegram_chat || '').trim().slice(0, 60),
-        String(b.wh1_name || '').trim().slice(0, 60),
-        String(b.wh2_name || '').trim().slice(0, 60),
+        hasKey('telegram_token') ? String(b.telegram_token || '').trim().slice(0, 200) : String(shop.telegram_token || ''),
+        hasKey('telegram_chat') ? String(b.telegram_chat || '').trim().slice(0, 60) : String(shop.telegram_chat || ''),
+        hasKey('wh1_name') ? String(b.wh1_name || '').trim().slice(0, 60) : String(shop.wh1_name || ''),
+        hasKey('wh2_name') ? String(b.wh2_name || '').trim().slice(0, 60) : String(shop.wh2_name || ''),
         bonus,
         autoBackup,
         alertLow,
         alertExpiry,
-        String(b.printer_host || '').trim().slice(0, 80),
+        hasKey('printer_host') ? String(b.printer_host || '').trim().slice(0, 80) : String(shop.printer_host || ''),
         printerPort,
         printerOn,
         printerWidth,
-        String(b.company_inn || '').trim().slice(0, 40),
-        String(b.company_address || '').trim().slice(0, 200),
-        String(b.company_phone || '').trim().slice(0, 40),
-        String(b.company_legal || '').trim().slice(0, 120),
+        hasKey('company_inn') ? String(b.company_inn || '').trim().slice(0, 40) : String(shop.company_inn || ''),
+        hasKey('company_address') ? String(b.company_address || '').trim().slice(0, 200) : String(shop.company_address || ''),
+        hasKey('company_phone') ? String(b.company_phone || '').trim().slice(0, 40) : String(shop.company_phone || ''),
+        hasKey('company_legal') ? String(b.company_legal || '').trim().slice(0, 120) : String(shop.company_legal || ''),
         lockedUntil,
         requireShift,
         fiscalOn,
-        String(b.fiscal_reg || '').trim().slice(0, 40),
-        String(b.fiscal_serial || '').trim().slice(0, 60),
+        hasKey('fiscal_reg') ? String(b.fiscal_reg || '').trim().slice(0, 40) : String(shop.fiscal_reg || ''),
+        hasKey('fiscal_serial') ? String(b.fiscal_serial || '').trim().slice(0, 60) : String(shop.fiscal_serial || ''),
         hubUrl,
-        String(b.hub_token || '').trim().slice(0, 80),
-        b.biz_mode === 'company' ? 'company' : 'shop',
+        hubToken,
+        bizMode,
         ...pinArgs,
         S
       );

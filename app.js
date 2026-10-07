@@ -937,10 +937,11 @@ function shiftBarHtml(){
     </div>`;
   }
   const who=sh.cashier_name?` · ${esc(sh.cashier_name)}`:'';
+  const exp=Number(st?.expected_cash)||0;
   return `<div class="shift-bar on">
     <div>
       <b>${t('shift')} #${sh.id}${who}</b>
-      <span>${t('shift_expected')}: ${cash(st?.expected_cash||0)} · ${t('checks')}: ${st?.checks||0}</span>
+      <span>${t('shift_expected')}: ${cash(exp)}${exp<0?' · ⚠':''} · ${t('checks')}: ${st?.checks||0}</span>
     </div>
     <div class="acts">
       <button class="outline" style="padding:8px 12px;font-size:12px" onclick="openCashMove('in')">${t('shift_cash_in')}</button>
@@ -986,7 +987,7 @@ async function closeShiftDialog(){
       ${t('shift_cash_out')}: <b>${cash(st.cash_out||0)}</b><br>
       ${t('shift_expected')}: <b>${cash(st.expected_cash||0)}</b>
     </div>`
-    +field(t('shift_close_cash'),'close_cash','number',((st.expected_cash||0)/100).toFixed(2),true,'required min="0" step="0.01"')
+    +field(t('shift_close_cash'),'close_cash','number',(Math.max(0,Number(st.expected_cash)||0)/100).toFixed(2),true,'required min="0" step="0.01"')
     +field(t('note'),'note','text','',true,'maxlength="200"'),
     async b=>{
       const r=await api('shift/close',b);
