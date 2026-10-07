@@ -565,7 +565,7 @@ function auth(){
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||location.origin)}" placeholder="https://savdo.example.com" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
         ${authMode==='register'?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}"></label>`:''}
-        <label>${t('phone')}<input name="phone" type="tel" inputmode="tel" required autocomplete="username" placeholder="900111222" maxlength="20"></label>
+        <label>${t('phone')}<input name="phone" type="tel" inputmode="tel" required autocomplete="username" placeholder="9001112233" maxlength="20"></label>
         <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}"></label>
         <div class="error" id="authError"></div>
         <button class="primary">${authMode==='login'?t('login'):t('start')}</button>

@@ -260,28 +260,49 @@ function verify(p, h) {
   const [s, v] = h.split(':');
   return timingSafeEqual(Buffer.from(v, 'hex'), scryptSync(p, s, 64));
 }
-/** Phone digits (9–15) → login key stored in users.email. Legacy emails still work. */
+/**
+ * Phone → canonical 9-digit local (TJ): 9001112233
+ * Accepts: 9001112233, +992 900 111 2233, 9929001112233, 09001112233
+ */
 function normalizePhone(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
-  if (digits.length < 9 || digits.length > 15) return '';
-  return digits;
+  let d = String(raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('992')) d = d.slice(3);
+  d = d.replace(/^0+/, '');
+  if (d.length > 9) d = d.slice(-9);
+  if (d.length !== 9) return '';
+  return d;
+}
+function loginKeysFromBody(b) {
+  const phone = normalizePhone(b.phone || b.login || '');
+  if (phone) {
+    // Canonical + legacy forms that may already be in DB
+    return [...new Set(['p:' + phone, 'p:992' + phone, 'p:0' + phone])];
+  }
+  const email = String(b.email || '').trim().toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return [email];
+  return [];
 }
 function loginKeyFromBody(b) {
-  const phone = normalizePhone(b.phone || b.login || '');
-  if (phone) return 'p:' + phone;
-  const email = String(b.email || '').trim().toLowerCase();
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return email;
-  return '';
+  return loginKeysFromBody(b)[0] || '';
 }
 function phoneFromLoginKey(key) {
   const k = String(key || '');
-  if (k.startsWith('p:')) return k.slice(2);
-  return '';
+  if (!k.startsWith('p:')) return '';
+  return normalizePhone(k.slice(2)) || k.slice(2).replace(/\D/g, '');
+}
+function findUserByLoginKeys(keys) {
+  for (const key of keys) {
+    const u = one(`SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`, key);
+    if (u) return u;
+  }
+  return null;
 }
 function findUserByLogin(raw) {
-  const key = loginKeyFromBody(typeof raw === 'string' ? {phone: raw, email: raw} : (raw || {}));
-  if (!key) return null;
-  return one(`SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`, key);
+  const keys = loginKeysFromBody(typeof raw === 'string' ? {phone: raw, email: raw} : (raw || {}));
+  if (!keys.length) return null;
+  return findUserByLoginKeys(keys);
 }
 function shopMemberCount(owner) {
   return one(
@@ -972,14 +993,15 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && ['/api/register', '/api/login', '/api/login/pin'].includes(url.pathname)) {
       // Login id = phone (short). App password = PIN 4–8 digits (no long password).
-      const loginKey = loginKeyFromBody(b);
+      const loginKeys = loginKeysFromBody(b);
+      const loginKey = loginKeys[0] || '';
       const pin = String(b.pin || b.password || '').trim();
       if (!loginKey) return reply(400, {error: te(L, 'need_phone')});
       if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
 
       if (url.pathname === '/api/register') {
         if (!String(b.name || '').trim()) return reply(400, {error: te(L, 'need_shop')});
-        if (one('SELECT id FROM users WHERE email=?', loginKey)) {
+        if (findUserByLoginKeys(loginKeys)) {
           return reply(400, {error: te(L, 'phone_used')});
         }
         const mode = b.biz_mode === 'company' ? 'company' : 'shop';
@@ -996,11 +1018,8 @@ const server = http.createServer(async (req, res) => {
         return reply(200, {ok: true});
       }
 
-      // login / login/pin — same: phone + app PIN
-      const user = one(
-        `SELECT * FROM users WHERE email=? AND IFNULL(role,'')!='branch'`,
-        loginKey
-      );
+      // login / login/pin — same: phone + app PIN (any phone format)
+      const user = findUserByLoginKeys(loginKeys);
       if (!user) return reply(401, {error: te(L, 'bad_login')});
       let ok = false;
       try {
@@ -2689,12 +2708,13 @@ const server = http.createServer(async (req, res) => {
       logAudit(S, u, 'import', `+${created} ~${updated}`);
       extra = {ok: true, created, updated, total: created + updated};
     } else if (url.pathname === '/api/staff') {
-      const loginKey = loginKeyFromBody(b);
+      const loginKeys = loginKeysFromBody(b);
+      const loginKey = loginKeys[0] || '';
       const name = String(b.name || '').trim();
       const pin = String(b.pin || b.password || '').trim();
       if (!loginKey || !name) throw Error(te(L, 'need_phone'));
       if (!/^\d{4,8}$/.test(pin)) throw Error(te(L, 'pin_need_staff'));
-      if (one('SELECT id FROM users WHERE email=?', loginKey)) throw Error(te(L, 'phone_used'));
+      if (findUserByLoginKeys(loginKeys)) throw Error(te(L, 'phone_used'));
       const role = b.role === 'admin' ? 'admin' : 'cashier';
       const shop = one('SELECT * FROM users WHERE id=?', S) || u;
       const pinHash = hash(pin);
