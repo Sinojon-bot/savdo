@@ -1,0 +1,21 @@
+# Savdo on VPS (Ubuntu) — example
+# 1) Upload project to /opt/savdo
+# 2) sudo apt install -y nginx certbot python3-certbot-nginx
+# 3) node server.mjs  (or systemd below)
+# 4) nginx proxy to 127.0.0.1:4173 + certbot --nginx -d YOUR.DOMAIN
+
+[Unit]
+Description=Savdo POS
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/savdo
+Environment=PORT=4173
+ExecStart=/usr/bin/node server.mjs
+Restart=always
+RestartSec=3
+User=www-data
+
+[Install]
+WantedBy=multi-user.target

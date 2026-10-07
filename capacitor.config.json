@@ -1,0 +1,9 @@
+{
+  "appId": "app.savdo.pos",
+  "appName": "Savdo",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  }
+}

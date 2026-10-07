@@ -9,3 +9,8 @@ mobile/www/
 .env
 .env.*
 Savdo-download.zip
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+remote-url.txt
+tools/cloudflared.exe
