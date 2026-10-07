@@ -98,16 +98,17 @@ function showAppUnlock(){
     <h2>${t('app_unlock_title')}</h2>
     <div class="sub">${t('app_unlock_hint')}</div>
     <form id="unlockForm">
-      <label>${t('app_unlock_pin')}<input name="pin" type="password" inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" autofocus></label>
+      <label class="wide">${t('app_unlock_pin')}<span class="pin-wrap"><input name="pin" id="unlockPin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" autofocus><button type="button" class="pin-eye" id="unlockPinEye">${t('show_pin')}</button></span></label>
       <div class="error" id="unlockError"></div>
       <button class="primary" type="submit">${t('app_unlock_btn')}</button>
     </form>
   </div></section></div>`;
+  wirePinEye(document.querySelector('#unlockPin'), document.querySelector('#unlockPinEye'));
   document.querySelector('#unlockForm').onsubmit=async e=>{
     e.preventDefault();
     const btn=e.target.querySelector('.primary');btn.disabled=true;
     try{
-      const pin=String(new FormData(e.target).get('pin')||'').trim();
+      const pin=String(new FormData(e.target).get('pin')||'').replace(/\D/g,'');
       await api('app-unlock',{pin});
       appUnlocked=true;
       await load();
@@ -190,6 +191,36 @@ function setHubBase(url){
 }
 function apiHostLabel(){
   try{return String(hubBase()||location.origin||'').replace(/^https?:\/\//i,'').replace(/\/$/,'')}catch{return ''}
+}
+/** Clean TJ mobile: 9 digits, no leading 0 / 992. */
+function sanitizePhoneDigits(raw){
+  let d=String(raw||'').replace(/\D/g,'');
+  const startedWithZero=/^0/.test(d);
+  if(d.startsWith('00')&&d.length>9)d=d.slice(2);
+  if(d.startsWith('992')&&d.length>9)d=d.slice(3);
+  const afterCc=d;
+  d=d.replace(/^0+/,'');
+  return {phone:d, startedWithZero:startedWithZero||/^0/.test(afterCc), rawDigits:String(raw||'').replace(/\D/g,'')};
+}
+function phoneErrorFor(raw){
+  const {phone, startedWithZero, rawDigits}=sanitizePhoneDigits(raw);
+  if(phone.length===9)return '';
+  if(startedWithZero||/^0/.test(rawDigits))return t('phone_leading_zero');
+  return t('need_phone');
+}
+function wirePinEye(input, btn){
+  if(!input||!btn)return;
+  const sync=()=>{
+    const on=input.type==='text';
+    btn.textContent=on?(t('hide_pin')||t('hide')):(t('show_pin')||'Aa');
+    btn.setAttribute('aria-pressed', on?'true':'false');
+  };
+  sync();
+  btn.onclick=e=>{
+    e.preventDefault();
+    input.type=input.type==='password'?'text':'password';
+    sync();
+  };
 }
 function apiUrl(path){return hubBase().replace(/\/$/,'')+'/api/'+String(path||'').replace(/^\//,'')}
 function sessionToken(){return String(localStorage.getItem(TOKEN_KEY)||'').trim()}
@@ -638,8 +669,8 @@ function auth(){
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
         ${isReg?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
-        <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="900112233" maxlength="20" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
-        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}" enterkeyhint="go"></label>
+        <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="933530505" maxlength="20" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <label class="wide">${t('app_pin')}<span class="pin-wrap"><input name="pin" id="authPin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}" enterkeyhint="go"><button type="button" class="pin-eye" id="pinEye">${t('show_pin')}</button></span></label>
         <div class="error" id="authError" hidden></div>
         <button class="primary">${isReg?t('start'):t('login')}</button>
       </form>
@@ -656,11 +687,12 @@ function auth(){
     auth();
   });
   const phoneEl=document.querySelector('#authForm [name=phone]');
-  const pinEl=document.querySelector('#authForm [name=pin]');
-  // Live-clean iPhone tel/password junk (spaces, +992 leftovers while typing).
+  const pinEl=document.querySelector('#authPin')||document.querySelector('#authForm [name=pin]');
+  wirePinEye(pinEl, document.querySelector('#pinEye'));
+  // Live-clean: spaces/+992; keep leading zeros visible until blur so user sees the fix.
   phoneEl?.addEventListener('blur',()=>{
-    const d=String(phoneEl.value||'').replace(/\D/g,'');
-    phoneEl.value=d.startsWith('992')&&d.length>9?d.slice(3):d.replace(/^0+/,'');
+    const {phone}=sanitizePhoneDigits(phoneEl.value);
+    if(phone)phoneEl.value=phone;
   });
   pinEl?.addEventListener('input',()=>{pinEl.value=String(pinEl.value||'').replace(/\D/g,'').slice(0,8)});
   document.querySelector('#authForm').onsubmit=async e=>{
@@ -671,13 +703,14 @@ function auth(){
       const body=Object.fromEntries(new FormData(e.target));
       const hub=String(body.hub||'').trim();
       delete body.hub;
-      // Sanitize for iPhone Safari autofill / spaces
-      body.phone=String(body.phone||'').replace(/\D/g,'');
-      if(body.phone.startsWith('992')&&body.phone.length>9)body.phone=body.phone.slice(3);
-      body.phone=body.phone.replace(/^0+/,'');
+      const phoneErr=phoneErrorFor(body.phone);
+      const cleaned=sanitizePhoneDigits(body.phone);
+      body.phone=cleaned.phone;
+      if(phoneEl)phoneEl.value=body.phone;
       body.pin=String(body.pin||'').replace(/\D/g,'');
       if(hub)setHubBase(hub);
       if(!hubBase())throw Error(t('need_hub_url'));
+      if(phoneErr)throw Error(phoneErr);
       if(body.phone.length!==9)throw Error(t('need_phone'));
       if(!/^\d{4,8}$/.test(body.pin))throw Error(t('bad_pin')||t('pin_hint'));
       if(isReg){
@@ -2613,14 +2646,14 @@ function openStaff(){
     field(t('name'),'name','text','',true)
     +`<label class="wide">${t('phone')}<input name="phone" type="tel" inputmode="numeric" required placeholder="900111222" maxlength="20" autocomplete="tel"></label>`
     +`<label>${t('role')}<select name="role"><option value="cashier">${t('role_cashier')}</option><option value="admin">${t('role_admin')}</option></select></label>`
-    +field(t('app_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" autocomplete="new-password"')
+    +`<label class="wide">${t('app_pin')}<span class="pin-wrap"><input name="pin" id="staffPin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required placeholder="${t('pin_hint')}" autocomplete="new-password"><button type="button" class="pin-eye" id="staffPinEye">${t('show_pin')}</button></span></label>`
     +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_give_hint')}<br><b>${t('staff_same_server')}: ${esc(apiHostLabel())}</b></p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(['kassa','shift'])}</div>`:''),
     b=>{
-      b.phone=String(b.phone||'').replace(/\D/g,'');
-      if(b.phone.startsWith('992')&&b.phone.length>9)b.phone=b.phone.slice(3);
-      b.phone=b.phone.replace(/^0+/,'');
+      const perr=phoneErrorFor(b.phone);
+      b.phone=sanitizePhoneDigits(b.phone).phone;
       b.pin=String(b.pin||b.password||'').replace(/\D/g,'');
+      if(perr)throw Error(perr);
       if(b.phone.length!==9)throw Error(t('need_phone'));
       if(!/^\d{4,8}$/.test(b.pin))throw Error(t('bad_pin')||t('pin_hint'));
       if(isCompany())b.permissions=readPermsFromBody(b);
@@ -2628,6 +2661,7 @@ function openStaff(){
       return api('staff',b);
     }
   );
+  wirePinEye(document.querySelector('#staffPin'), document.querySelector('#staffPinEye'));
 }
 function editStaff(id){
   const st=(state.staff||[]).find(x=>x.id===id);if(!st){toast(t('not_found'));return}

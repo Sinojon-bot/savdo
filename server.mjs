@@ -267,10 +267,11 @@ function verify(p, h) {
 function normalizePhone(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (!d) return '';
-  if (d.startsWith('00')) d = d.slice(2);
-  if (d.startsWith('992')) d = d.slice(3);
+  // International 00… only when longer than a local 9-digit number
+  if (d.startsWith('00') && d.length > 9) d = d.slice(2);
+  if (d.startsWith('992') && d.length > 9) d = d.slice(3);
   d = d.replace(/^0+/, '');
-  // Exactly 9 digits (e.g. 90xxxxxxx / 91xxxxxxx)
+  // Exactly 9 digits (e.g. 90xxxxxxx / 91xxxxxxx) — not starting with 0
   if (d.length === 9) return d;
   return '';
 }
