@@ -4,7 +4,8 @@
  * Usage: node tools/mvp-test.mjs [baseUrl]
  */
 const BASE = (process.argv[2] || 'http://127.0.0.1:4173').replace(/\/$/, '');
-const phone = `900${String(Date.now()).slice(-6)}${String(Math.floor(Math.random()*90)+10)}`;
+// TJ mobile = exactly 9 digits (e.g. 90xxxxxxx)
+const phone = `90${String(Date.now()).slice(-7)}`;
 const pin = '4321';
 const jar = new Map();
 let staffPhone = '';
@@ -105,6 +106,16 @@ async function main() {
     const s = await api('state');
     if (!s.user) throw Error('login failed');
     if (!s.user.is_director) throw Error('owner should be director');
+  });
+
+  await soft('login phone formats +992 / spaces', async () => {
+    jar.clear();
+    await api('login', {phone: `+992 ${phone.slice(0, 3)} ${phone.slice(3, 6)} ${phone.slice(6)}`, pin});
+    jar.clear();
+    await api('login', {phone: `992${phone}`, pin});
+    const s = await api('state');
+    if (!s.user) throw Error('format login failed');
+    return s.user.phone || phone;
   });
 
   await soft('login without phone rejected', async () => {
@@ -213,7 +224,7 @@ async function main() {
   });
 
   await step('add staff with unique PIN', async () => {
-    staffPhone = `901${String(Date.now()).slice(-6)}${String(Math.floor(Math.random()*90)+10)}`;
+    staffPhone = `91${String(Date.now()).slice(-7)}`;
     await api('staff', {
       name: 'MVP Cashier',
       phone: staffPhone,
