@@ -1722,11 +1722,16 @@ const server = http.createServer(async (req, res) => {
         owner
       );
       if (!cashier) throw Error(te(L, 'not_found'));
-      const pin = String(b.pin || '').trim();
-      if (!cashier.pin) throw Error(te(L, 'pin_not_set'));
-      let pinOk = false;
-      try { pinOk = /^\d{4,8}$/.test(pin) && verify(pin, cashier.pin); } catch { pinOk = false; }
-      if (!pinOk) throw Error(te(L, 'bad_pin'));
+      // Already logged in as this cashier → no second PIN. Director opening for another → need their PIN.
+      if (cashier.id !== u.id) {
+        const pin = String(b.pin || '').trim();
+        if (!cashier.pin) throw Error(te(L, 'pin_not_set'));
+        let pinOk = false;
+        try { pinOk = /^\d{4,8}$/.test(pin) && verify(pin, cashier.pin); } catch { pinOk = false; }
+        if (!pinOk) throw Error(te(L, 'bad_pin'));
+      } else if (!cashier.pin) {
+        throw Error(te(L, 'pin_not_set'));
+      }
       const r = run(
         `INSERT INTO shifts(user_id,opened_at,open_cash,status,note,cashier_id) VALUES(?,?,?,'open',?,?)`,
         S,

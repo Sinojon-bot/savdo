@@ -434,7 +434,19 @@ async function main() {
     if (!s.user || (s.user.phone !== staffPhone && s.user.login !== staffPhone)) {
       throw Error('wrong user after phone login');
     }
+    if (s.user.role !== 'cashier') throw Error('role=' + s.user.role);
+    if (s.user.is_director) throw Error('cashier must not be director');
     return s.user.phone || s.user.login;
+  });
+
+  await soft('cashier opens own shift without PIN again', async () => {
+    const s = await api('state');
+    if (s.shift) {
+      const cashAmt = Math.max(0, Math.round(Number(s.shift_stats?.expected_cash) || 0) / 100);
+      await api('shift/close', {close_cash: Number(cashAmt.toFixed(2))});
+    }
+    const r = await api('shift/open', {open_cash: 10, cashier_id: staffId});
+    return `shift#${r.id}`;
   });
 
   await soft('admin can void last sale', async () => {

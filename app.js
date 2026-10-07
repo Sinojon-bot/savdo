@@ -586,6 +586,8 @@ function auth(){
       if(!hubBase())throw Error(t('need_hub_url'));
       if(authMode==='register')body.biz_mode=draftMode()||'shop';
       await api(authMode==='register'?'register':'login',body);
+      // Already entered app code at login — do not ask unlock again.
+      appUnlocked=true;
       load();
     }catch(err){document.querySelector('#authError').textContent=err.message;btn.disabled=false}
   };
@@ -604,7 +606,7 @@ const navs=()=>{
     ['accounting','Σ',t('nav_accounting'),()=>can('accounting')&&modeHas('accounting')],
     ['central','◈',t('nav_central'),()=>can('shops')&&modeHas('central')],
     ['audit','☰',t('nav_audit'),()=>can('audit')&&modeHas('audit')],
-    ['settings','⚙',t('nav_settings'),()=>true]
+    ['settings','⚙',t('nav_settings'),()=>isDirectorUser()||state?.user?.role!=='cashier']
   ];
   return all.filter(([, , ,ok])=>ok());
 };
@@ -774,7 +776,7 @@ function render(){
           ${(state.shops||[{id:state.user.active_shop_id,name:state.user.name}]).map(s=>`<option value="${s.id}" ${Number(s.id)===Number(state.user.active_shop_id)?'selected':''}>${esc(s.name)}</option>`).join('')}
         </select>
       </div>`:''}
-      <div class="aside-foot"><b>${esc(state.user.name)}</b>${state.user.currency} · ${isCompany()?t('mode_company_badge'):t('mode_shop_badge')}<br><button class="outline" style="padding:6px 10px;margin-top:10px;font-size:12px" onclick="logout()">${t('logout')}</button></div>
+      <div class="aside-foot"><b>${esc(state.user.role==='cashier'?(state.user.cashier_name||state.user.login||state.user.phone||''):state.user.name)}</b>${state.user.role==='cashier'?` · ${t('role_cashier')}`:` · ${state.user.currency}`} · ${isCompany()?t('mode_company_badge'):t('mode_shop_badge')}<br>${state.user.phone||state.user.login?`<span style="font-size:11px;color:var(--muted)">${esc(state.user.phone||state.user.login)}</span><br>`:''}<button class="outline" style="padding:6px 10px;margin-top:10px;font-size:12px" onclick="logout()">${t('logout')}</button></div>
     </aside>
     <main>
       <div class="top">
@@ -981,12 +983,24 @@ function shiftBarHtml(){
 }
 function openShiftDialog(){
   const list=state.cashiers||[];
-  const me=list.find(c=>c.id===state.user?.id)||list[0];
+  const meId=state.user?.id;
+  const isCashier=state.user?.role==='cashier';
+  const me=list.find(c=>c.id===meId)||list[0];
+  // Cashier already logged in with their phone+code — open shift as themselves, no PIN again.
+  if(isCashier){
+    showModal(t('shift_open_btn'),
+      `<p class="wide" style="margin:0 0 8px;color:var(--muted);font-size:13px">${t('cashier')}: <b>${esc(state.user.cashier_name||me?.name||'')}</b></p>`
+      +`<input type="hidden" name="cashier_id" value="${meId||''}">`
+      +field(t('shift_open_cash'),'open_cash','number','0',true,'required min="0" step="0.01"'),
+      async b=>{await api('shift/open',{...b,cashier_id:meId});toast(t('shift_opened'));}
+    );
+    return;
+  }
   const opts=list.length
     ? `<label class="wide">${t('shift_cashier')}<select name="cashier_id" required>
         ${list.map(c=>`<option value="${c.id}" ${me&&c.id===me.id?'selected':''}>${esc(c.name)}${c.has_pin?'':' · '+t('pin_not_set_short')}</option>`).join('')}
       </select></label>`
-    : `<input type="hidden" name="cashier_id" value="">`;
+    : `<input type="hidden" name="cashier_id" value="${meId||''}">`;
   showModal(t('shift_open_btn'),
     opts
     +field(t('shift_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8" autocomplete="one-time-code"')
@@ -2487,7 +2501,7 @@ function openStaff(){
     +`<label class="wide">${t('phone')}<input name="phone" type="tel" inputmode="tel" required placeholder="900111222" maxlength="20"></label>`
     +`<label>${t('role')}<select name="role"><option value="cashier">${t('role_cashier')}</option><option value="admin">${t('role_admin')}</option></select></label>`
     +field(t('app_pin'),'pin','password','',true,'required inputmode="numeric" pattern="\\d{4,8}" minlength="4" maxlength="8"')
-    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_pin_hint')}</p>`
+    +`<p class="wide" style="margin:0;color:var(--muted);font-size:13px">${t('staff_give_hint')}</p>`
     +(isCompany()?`<div class="wide"><b>${t('permissions')}</b>${permChecksHtml(['kassa','shift'])}</div>`:''),
     b=>{
       if(isCompany())b.permissions=readPermsFromBody(b);
