@@ -487,6 +487,8 @@ async function load(){
     if(can('accounting')&&modeHas('accounting'))allowed.push('accounting');
     if(can('shops')&&modeHas('central'))allowed.push('central');
     if(!allowed.includes(view))view=allowed.includes('home')?'home':(allowed.includes('kassa')?'kassa':'settings');
+    document.body.classList.remove('auth-open');
+    document.body.classList.add('app-ready');
     render();
     hideSplash();
     if(needWelcome){needWelcome=false;showWelcomeFlash()}
@@ -500,6 +502,8 @@ async function load(){
 }
 function showModePicker(onPick){
   hideSplash();
+  document.body.classList.remove('auth-open');
+  document.body.classList.remove('app-ready');
   document.querySelector('#app').innerHTML=`
   <div class="mode-pick">
     <div class="mode-pick-inner">
@@ -564,6 +568,8 @@ setTimeout(()=>{try{hideSplash()}catch{}},4000);
 function auth(){
   state=null;
   hideSplash();
+  document.body.classList.add('auth-open');
+  document.body.classList.remove('app-ready');
   if(!draftMode()){
     showModePicker(mode=>{setDraftMode(mode);auth()});
     return;
@@ -581,8 +587,8 @@ function auth(){
       <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
         <h2>${t('role_ask')}</h2>
         <div class="sub">${t('role_ask_sub')}</div>
-        <button type="button" class="primary" id="roleCashier" style="width:100%;margin:0 0 10px">${t('role_cashier')}</button>
-        <button type="button" class="outline" id="roleDirector" style="width:100%;margin:0 0 10px;min-height:48px">${t('role_director')}</button>
+        <button type="button" class="primary role-btn" id="roleCashier" style="width:100%;margin:0 0 10px">${t('role_cashier')}</button>
+        <button type="button" class="outline role-btn" id="roleDirector">${t('role_director')}</button>
         <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
       </div></section>
     </div>`;
@@ -614,9 +620,9 @@ function auth(){
       <form id="authForm">
         ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
         ${isReg?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
-        <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="900112233" maxlength="20" enterkeyhint="next"></label>
-        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="current-password" placeholder="${t('pin_hint')}" enterkeyhint="go"></label>
-        <div class="error" id="authError"></div>
+        <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="900112233" maxlength="20" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
+        <label>${t('app_pin')}<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}" enterkeyhint="go"></label>
+        <div class="error" id="authError" hidden></div>
         <button class="primary">${isReg?t('start'):t('login')}</button>
       </form>
       ${!isCashier?`<button class="switch" id="switchBtn" type="button">${isReg?t('have_account'):t('new_account')}</button>`:''}
@@ -631,20 +637,36 @@ function auth(){
     else{authRolePick='register';authMode='register'}
     auth();
   });
+  const phoneEl=document.querySelector('#authForm [name=phone]');
+  const pinEl=document.querySelector('#authForm [name=pin]');
+  // Live-clean iPhone tel/password junk (spaces, +992 leftovers while typing).
+  phoneEl?.addEventListener('blur',()=>{
+    const d=String(phoneEl.value||'').replace(/\D/g,'');
+    phoneEl.value=d.startsWith('992')&&d.length>9?d.slice(3):d.replace(/^0+/,'');
+  });
+  pinEl?.addEventListener('input',()=>{pinEl.value=String(pinEl.value||'').replace(/\D/g,'').slice(0,8)});
   document.querySelector('#authForm').onsubmit=async e=>{
     e.preventDefault();const btn=e.target.querySelector('.primary');btn.disabled=true;
+    const errEl=document.querySelector('#authError');
+    if(errEl){errEl.hidden=true;errEl.textContent=''}
     try{
       const body=Object.fromEntries(new FormData(e.target));
       const hub=String(body.hub||'').trim();
       delete body.hub;
+      // Sanitize for iPhone Safari autofill / spaces
+      body.phone=String(body.phone||'').replace(/\D/g,'');
+      if(body.phone.startsWith('992')&&body.phone.length>9)body.phone=body.phone.slice(3);
+      body.phone=body.phone.replace(/^0+/,'');
+      body.pin=String(body.pin||'').replace(/\D/g,'');
       if(hub)setHubBase(hub);
       if(!hubBase())throw Error(t('need_hub_url'));
+      if(body.phone.length!==9)throw Error(t('need_phone'));
+      if(!/^\d{4,8}$/.test(body.pin))throw Error(t('bad_pin')||t('pin_hint'));
       if(isReg){
         body.biz_mode=draftMode()||'shop';
         await api('register',body);
       }else{
         await api('login',body);
-        // Cashier path: must be staff cashier (not director creating a shop).
         if(isCashier){
           const s=await api('state');
           if(s.user?.role!=='cashier'){
@@ -655,8 +677,13 @@ function auth(){
         }
       }
       appUnlocked=true;
+      document.body.classList.remove('auth-open');
+      document.body.classList.add('app-ready');
       load();
-    }catch(err){document.querySelector('#authError').textContent=err.message;btn.disabled=false}
+    }catch(err){
+      if(errEl){errEl.hidden=false;errEl.textContent=err.message}
+      btn.disabled=false;
+    }
   };
 }
 

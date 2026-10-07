@@ -29,9 +29,18 @@ body{margin:0;min-height:100vh;min-height:100dvh;font:16px/1.45 var(--font);colo
   radial-gradient(800px 360px at 100% 0%,rgba(226,177,60,.18),transparent 55%),
   radial-gradient(700px 400px at 0% 100%,rgba(26,60,52,.08),transparent 50%),
   linear-gradient(180deg,#f7f5ef,var(--bg));
-  padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
-  -webkit-tap-highlight-color:transparent}
+  padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  -webkit-tap-highlight-color:transparent;
+  -webkit-font-smoothing:antialiased}
+body.app-ready{padding-top:env(safe-area-inset-top)}
+html:has(body.auth-open),
+body.auth-open{
+  padding-top:0;
+  background:#14352e!important;
+}
+body.auth-open #app{min-height:100dvh;background:transparent}
 html{-webkit-text-size-adjust:100%}
+.error[hidden]{display:none!important}
 .install-banner{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-bottom:12px;padding:14px;border-radius:18px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);font-size:13px}
 .install-banner b{display:block;font-size:15px;margin-bottom:2px;font-family:var(--display)}
 .install-banner .store-row{display:flex;gap:12px;align-items:center;flex:1;min-width:0}
@@ -302,9 +311,14 @@ tr.low-row:hover td{background:#ffe4e2!important}
     touch-action:pan-y pinch-zoom;
     background:var(--bg);
   }
-  body{
-    background:var(--bg);
+  body{background:var(--bg)}
+  /* iPhone/Android: сабз то зери status bar — бе фосилаи сафед */
+  html:has(body.auth-open),
+  body.auth-open{
+    background:#14352e!important;
+    padding-top:0!important;
   }
+  body.auth-open #app{background:transparent!important}
   .app{
     display:block;
     min-height:auto;
@@ -417,20 +431,70 @@ tr.low-row:hover td{background:#ffe4e2!important}
   table{font-size:12px}
   th,td{padding:12px 10px}
   .formgrid{grid-template-columns:1fr}
-  .auth{grid-template-columns:1fr;background:var(--bg)}
-  .auth-art{
-    min-height:0;padding:18px 18px 14px;
-    background:linear-gradient(145deg,#14352e,#1a3c34);
+  .auth{
+    grid-template-columns:1fr;
+    min-height:100dvh;
+    min-height:-webkit-fill-available;
+    align-content:start;
+    background:
+      radial-gradient(420px 220px at 90% 0%,rgba(240,195,90,.22),transparent 55%),
+      linear-gradient(180deg,#14352e 0%,#1a3c34 32%,#e8eee9 32%,#eef2f0 100%);
   }
+  .auth-art{
+    min-height:0;
+    padding:calc(10px + env(safe-area-inset-top,0px)) 18px 14px;
+    background:transparent;
+    border:0;
+    justify-content:flex-start;
+  }
+  .auth-art::after{opacity:.12;background-size:18px 18px}
   .auth-art h1{display:none}
   .auth-art p{display:none}
-  .auth-badges{display:none}
-  .auth-art .brand{font-size:22px;margin:0}
-  .auth-art .mark{width:40px;height:40px;font-size:18px;border-radius:12px}
-  .auth-form{padding:18px 16px 32px;background:var(--bg);place-items:start center}
-  .auth-box{max-width:100%;padding:0}
-  .auth-box h2{font-size:24px}
-  .auth-box button.primary{min-height:52px;border-radius:16px;font-size:16px}
+  .auth-badges{display:flex;margin-top:10px;gap:6px}
+  .auth-badges span{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.14);font-size:11px;padding:6px 10px}
+  .auth-art .brand{font-size:26px;margin:0;color:#fff;padding:0;gap:10px}
+  .auth-art .mark{width:46px;height:46px;font-size:21px;border-radius:14px;box-shadow:0 10px 22px rgba(0,0,0,.22)}
+  .auth-form{
+    padding:0 14px calc(36px + env(safe-area-inset-bottom,0px));
+    background:transparent;
+    place-items:start center;
+  }
+  .auth-box{
+    max-width:100%;
+    width:100%;
+    padding:20px 16px 18px;
+    background:#fff;
+    border:1px solid rgba(226,232,240,.95);
+    border-radius:22px;
+    box-shadow:0 16px 36px rgba(15,23,42,.1);
+  }
+  .auth-box h2{font-size:23px;margin:0 0 6px;letter-spacing:-.03em;color:#0f172a;text-align:center}
+  .auth-box .sub{font-size:13px;line-height:1.4;margin-bottom:16px;text-align:center}
+  .auth-box label{font-size:12px;margin-bottom:10px;font-weight:700;color:#334155}
+  .auth-box input{
+    min-height:52px;border-radius:14px;font-size:17px;padding:12px 14px;
+    border:1.5px solid #e2e8f0;background:#f8fafc;width:100%;
+  }
+  .auth-box input:focus{border-color:#2a6b58;background:#fff;box-shadow:0 0 0 3px rgba(42,107,88,.15);outline:0}
+  .auth-box button.primary{
+    min-height:54px;border-radius:16px;font-size:17px;margin-top:8px;font-weight:800;
+    box-shadow:0 12px 28px rgba(26,60,52,.28);
+  }
+  .auth-box button.outline.role-btn{
+    width:100%;min-height:54px;margin:0 0 10px;border-radius:16px;font-size:16px;font-weight:700;
+    border:1.5px solid #e2e8f0;background:#fff;color:var(--ink);
+  }
+  .auth-box button.primary.role-btn{margin:0 0 10px}
+  .auth-box .error{
+    background:#fdeceb;border:1px solid #f5c2c0;border-radius:12px;padding:11px 12px;min-height:0;
+    margin:2px 0 12px;font-size:13px;font-weight:700;line-height:1.35;text-align:center;color:#b42318;
+  }
+  .auth-box .lang-switch{justify-content:center;margin-bottom:14px;gap:8px}
+  .auth-box .lang-switch button{min-height:36px;padding:8px 12px;font-size:13px}
+  .auth-box .switch{
+    min-height:44px;padding:12px 8px;font-size:14px;font-weight:700;margin-top:8px;
+    color:#1f8a66;
+  }
   dialog{width:min(100vw - 16px,520px);max-height:min(92dvh,900px);overflow:auto;padding:18px;border-radius:22px;margin:auto;border:0;box-shadow:0 24px 60px rgba(15,23,42,.2)}
   dialog h2{font-size:18px}
   .install-banner{flex-direction:column;align-items:stretch;gap:12px;padding:14px;border-radius:20px}

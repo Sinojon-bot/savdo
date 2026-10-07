@@ -1013,7 +1013,8 @@ const server = http.createServer(async (req, res) => {
       // Login id = phone (short). App password = PIN 4–8 digits (no long password).
       const loginKeys = loginKeysFromBody(b);
       const loginKey = loginKeys[0] || '';
-      const pin = String(b.pin || b.password || '').trim();
+      // Digits only — iPhone often inserts spaces / invisible chars in tel/password fields.
+      const pin = String(b.pin || b.password || '').replace(/\D/g, '');
       if (!loginKey) return reply(400, {error: te(L, 'need_phone')});
       if (!/^\d{4,8}$/.test(pin)) return reply(400, {error: te(L, 'bad_pin')});
 
@@ -1038,13 +1039,13 @@ const server = http.createServer(async (req, res) => {
 
       // login / login/pin — same: phone + app PIN (any phone format)
       const user = findUserByLoginKeys(loginKeys);
-      if (!user) return reply(401, {error: te(L, 'bad_login')});
+      if (!user) return reply(401, {error: te(L, 'phone_not_found')});
       let ok = false;
       try {
         if (user.pin) ok = verify(pin, user.pin);
         if (!ok && user.password) ok = verify(pin, user.password);
       } catch { ok = false; }
-      if (!ok) return reply(401, {error: te(L, 'bad_login')});
+      if (!ok) return reply(401, {error: te(L, 'bad_pin')});
       const tok = session(res, user.id, req);
       return reply(200, {ok: true, token: tok});
     }
