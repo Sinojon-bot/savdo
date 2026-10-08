@@ -208,12 +208,23 @@ function setHubBase(url){
 function apiHostLabel(){
   try{return String(hubBase()||location.origin||'').replace(/^https?:\/\//i,'').replace(/\/$/,'')}catch{return ''}
 }
+let serverHealth={accounts:null};
+async function refreshServerHealth(){
+  try{
+    const r=await fetch(apiUrl('health'),{cache:'no-store',headers:apiHeaders()});
+    const j=await r.json();
+    serverHealth={accounts:Number(j.accounts)||0};
+  }catch{serverHealth={accounts:null}}
+  return serverHealth;
+}
 function serverBannerHtml(){
   const host=apiHostLabel()||'—';
   const cloud=String(DEFAULT_CLOUD_HUB).replace(/^https?:\/\//i,'').replace(/\/$/,'');
   const onCloud=host===cloud||String(hubBase()).replace(/\/$/,'')===DEFAULT_CLOUD_HUB;
-  return `<div class="server-banner" id="serverBanner">
+  const empty=serverHealth.accounts===0;
+  return `<div class="server-banner ${empty?'warn':''}" id="serverBanner">
     <div>${t('server_now')}: <b>${esc(host)}</b></div>
+    ${empty?`<div style="margin-top:6px;font-weight:700">${t('server_empty')}</div>`:''}
     ${onCloud?'':`<button type="button" class="outline" id="useCloudBtn" style="margin-top:8px;width:100%;min-height:42px">${t('use_cloud_like_phone')}</button>`}
   </div>`;
 }
@@ -361,7 +372,9 @@ async function api(path,data){
     }
     return b;
   }catch(e){
-    if(write&&isNetErr(e)){
+    // Never queue login/register/logout — that fakes success on the wrong/empty server.
+    const noQueue=/^(login|login\/pin|register|logout|app-unlock)$/.test(String(path||''));
+    if(write&&isNetErr(e)&&!noQueue){
       const q=readQueue();
       q.push({op_id,path,body:data,ts:Date.now()});
       writeQueue(q);
@@ -370,9 +383,12 @@ async function api(path,data){
     }
     // 401 = need login — never fall back to stale cache
     if(path==='state'&&(e.status===401||/ворид|войдите|sign in/i.test(String(e.message||'')))){
+      try{localStorage.removeItem(STATE_KEY)}catch{}
+      setSessionToken('');
       throw e;
     }
-    if(path==='state'&&!e.status){
+    // Offline cache only with a real session token (phones were showing old shop after DB wipe).
+    if(path==='state'&&!e.status&&sessionToken()){
       const raw=localStorage.getItem(STATE_KEY);
       if(raw){
         try{
@@ -649,11 +665,14 @@ function hideSplash(){
 // phone: never leave splash stuck
 setTimeout(()=>{try{hideSplash()}catch{}},1500);
 setTimeout(()=>{try{hideSplash()}catch{}},4000);
-function auth(){
+async function auth(){
   state=null;
   hideSplash();
   document.body.classList.add('auth-open');
   document.body.classList.remove('app-ready');
+  try{localStorage.removeItem(STATE_KEY)}catch{}
+  setSessionToken('');
+  await refreshServerHealth();
   if(!draftMode()){
     showModePicker(mode=>{setDraftMode(mode);auth()});
     return;

@@ -15,7 +15,13 @@ function reqLang(req) {
 function E(req, key, vars) {
   return Error(te(reqLang(req), key, vars));
 }
-const dataDir = path.join(root, 'data');
+// Prefer persistent disk when mounted (Render Disk → /var/data).
+const dataDir = (() => {
+  const fromEnv = String(process.env.SAVDO_DATA_DIR || '').trim();
+  if (fromEnv) return fromEnv;
+  if (existsSync('/var/data')) return '/var/data';
+  return path.join(root, 'data');
+})();
 const dbPath = path.join(dataDir, 'savdo.sqlite');
 mkdirSync(dataDir, {recursive: true});
 const db = new DatabaseSync(dbPath);
@@ -985,6 +991,10 @@ const server = http.createServer(async (req, res) => {
       }
       res.writeHead(200, {'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400'});
       return res.end(readFileSync(iconPath));
+    }
+    if (url.pathname === '/api/health' && req.method === 'GET') {
+      const accounts = one(`SELECT COUNT(*) AS c FROM users WHERE IFNULL(role,'')!='branch'`)?.c || 0;
+      return reply(200, {ok: true, accounts: Number(accounts) || 0, data_dir: dataDir});
     }
     if (!url.pathname.startsWith('/api/')) return reply(404, {error: te(reqLang(req), 'not_found')});
 
