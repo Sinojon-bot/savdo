@@ -10,3 +10,10 @@ services:
         value: "22"
       - key: PORT
         value: "4173"
+      # GitHub PAT so DB survives Render free restarts (Settings → Environment)
+      - key: SAVDO_BACKUP_TOKEN
+        sync: false
+      - key: SAVDO_BACKUP_REPO
+        value: Sinojon-bot/savdo
+      - key: SAVDO_BACKUP_TAG
+        value: savdo-data

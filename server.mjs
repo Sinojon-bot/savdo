@@ -7,6 +7,11 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import net from 'node:net';
 import {clientBundle, normalizeLang, te} from './i18n.mjs';
+import {
+  backupStatus,
+  pullCloudBackup,
+  pushCloudBackup
+} from './cloud-backup.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 function reqLang(req) {
@@ -258,6 +263,45 @@ try {
 const run = (q, ...a) => db.prepare(q).run(...a);
 const all = (q, ...a) => db.prepare(q).all(...a);
 const one = (q, ...a) => db.prepare(q).get(...a);
+
+function accountCount() {
+  return Number(one(`SELECT COUNT(*) AS c FROM users WHERE IFNULL(role,'')!='branch'`)?.c || 0);
+}
+
+let cloudBackupTimer = null;
+let cloudBackupBusy = false;
+function scheduleCloudBackup(reason = '') {
+  if (cloudBackupTimer) clearTimeout(cloudBackupTimer);
+  cloudBackupTimer = setTimeout(() => {
+    persistCloudBackup(reason).catch(e => console.warn('cloud backup:', e.message || e));
+  }, 8000);
+}
+async function persistCloudBackup(reason = '') {
+  if (cloudBackupBusy) return;
+  if (accountCount() < 1) return;
+  cloudBackupBusy = true;
+  try {
+    const r = await pushCloudBackup({all, dataDir});
+    if (r?.ok) console.log('Cloud backup OK', reason || '', r.bytes, r.at);
+    else if (r?.skipped) console.log('Cloud backup skipped:', r.reason);
+  } finally {
+    cloudBackupBusy = false;
+  }
+}
+async function bootCloudRestore() {
+  if (accountCount() > 0) {
+    console.log('DB accounts=' + accountCount() + ' · cloud backup ' + (backupStatus().configured ? 'ON' : 'OFF (set SAVDO_BACKUP_TOKEN)'));
+    return;
+  }
+  console.log('DB empty — trying cloud restore…');
+  try {
+    const r = await pullCloudBackup({run, tx, all, one, dataDir});
+    if (r?.ok) console.log('Cloud restore OK from', r.source, '· accounts=' + accountCount());
+    else console.log('Cloud restore skipped:', r?.reason || r);
+  } catch (e) {
+    console.warn('Cloud restore failed:', e.message || e);
+  }
+}
 
 function hash(p, salt = randomBytes(16).toString('hex')) {
   return salt + ':' + scryptSync(p, salt, 64).toString('hex');
@@ -993,8 +1037,14 @@ const server = http.createServer(async (req, res) => {
       return res.end(readFileSync(iconPath));
     }
     if (url.pathname === '/api/health' && req.method === 'GET') {
-      const accounts = one(`SELECT COUNT(*) AS c FROM users WHERE IFNULL(role,'')!='branch'`)?.c || 0;
-      return reply(200, {ok: true, accounts: Number(accounts) || 0, data_dir: dataDir});
+      const bs = backupStatus();
+      return reply(200, {
+        ok: true,
+        accounts: accountCount(),
+        data_dir: dataDir,
+        backup: bs.configured ? 'on' : 'off',
+        backup_repo: bs.repo
+      });
     }
     if (!url.pathname.startsWith('/api/')) return reply(404, {error: te(reqLang(req), 'not_found')});
 
@@ -1054,8 +1104,9 @@ const server = http.createServer(async (req, res) => {
           mode,
           pinHash
         );
-        const tok = session(res, Number(r.lastInsertRowid), req);
-        return reply(200, {ok: true, token: tok});
+      const tok = session(res, Number(r.lastInsertRowid), req);
+      scheduleCloudBackup('register');
+      return reply(200, {ok: true, token: tok});
       }
 
       // login / login/pin — same: phone + app PIN (any phone format)
@@ -3125,6 +3176,18 @@ const server = http.createServer(async (req, res) => {
       } catch {}
     }
 
+    if (
+      req.method === 'POST' &&
+      ![
+        '/api/login',
+        '/api/login/pin',
+        '/api/logout',
+        '/api/app-unlock'
+      ].includes(url.pathname)
+    ) {
+      scheduleCloudBackup(url.pathname);
+    }
+
     reply(200, extra);
   } catch (e) {
     reply(e.status || 400, {error: e.message || te(reqLang(req), 'failed')});
@@ -3132,11 +3195,18 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = Number(process.env.PORT) || 4173;
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log('Savdo hub готов. PORT=' + PORT);
+  console.log('Data dir: ' + dataDir);
   for (const u of lanUrls(PORT)) console.log('  ' + u);
   const remote = readRemoteUrl();
   if (remote) console.log('  Remote: ' + remote);
+  await bootCloudRestore();
+  // Keep cloud copy fresh while the free instance is awake.
+  setInterval(() => {
+    persistCloudBackup('interval').catch(() => {});
+  }, 3 * 60 * 1000);
+  if (accountCount() > 0) scheduleCloudBackup('boot');
   console.log('Домен/интернет: откройте https://ваш-домен → /download');
   console.log('Не закрывайте это окно (локально) / используйте systemd на VPS.');
 });

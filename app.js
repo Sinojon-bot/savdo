@@ -213,8 +213,8 @@ async function refreshServerHealth(){
   try{
     const r=await fetch(apiUrl('health'),{cache:'no-store',headers:apiHeaders()});
     const j=await r.json();
-    serverHealth={accounts:Number(j.accounts)||0};
-  }catch{serverHealth={accounts:null}}
+    serverHealth={accounts:Number(j.accounts)||0, backup:j.backup||null};
+  }catch{serverHealth={accounts:null, backup:null}}
   return serverHealth;
 }
 function serverBannerHtml(){
@@ -222,9 +222,11 @@ function serverBannerHtml(){
   const cloud=String(DEFAULT_CLOUD_HUB).replace(/^https?:\/\//i,'').replace(/\/$/,'');
   const onCloud=host===cloud||String(hubBase()).replace(/\/$/,'')===DEFAULT_CLOUD_HUB;
   const empty=serverHealth.accounts===0;
-  return `<div class="server-banner ${empty?'warn':''}" id="serverBanner">
+  const backupOff=serverHealth.backup==='off';
+  return `<div class="server-banner ${empty||backupOff?'warn':''}" id="serverBanner">
     <div>${t('server_now')}: <b>${esc(host)}</b></div>
     ${empty?`<div style="margin-top:6px;font-weight:700">${t('server_empty')}</div>`:''}
+    ${!empty&&backupOff?`<div style="margin-top:6px;font-weight:700">${t('backup_off_warn')}</div>`:''}
     ${onCloud?'':`<button type="button" class="outline" id="useCloudBtn" style="margin-top:8px;width:100%;min-height:42px">${t('use_cloud_like_phone')}</button>`}
   </div>`;
 }
