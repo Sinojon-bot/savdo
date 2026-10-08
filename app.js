@@ -160,6 +160,16 @@ function isNativeShell(){
 function needsHubField(){
   return isNativeShell() || !isPublicCloud();
 }
+function isLocalHub(url){
+  const u=String(url||'').toLowerCase();
+  if(!u)return true;
+  try{
+    const h=new URL(u).hostname;
+    if(!h||h==='localhost'||h==='127.0.0.1')return true;
+    if(/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(h))return true;
+  }catch{return /localhost|127\.0\.0\.1/.test(u)}
+  return false;
+}
 function hubBase(){
   // Opened on the cloud site (Render) → ALWAYS this site. Old localStorage hub
   // (localhost / LAN) was sending PC API to another DB while iPhone used Render.
@@ -172,10 +182,16 @@ function hubBase(){
     return location.origin;
   }
   const saved=String(localStorage.getItem(HUB_KEY)||'').trim().replace(/\/$/,'');
-  if(saved)return saved;
-  // Capacitor / offline install: talk to cloud by default (iPhone & Android).
+  // PC opened localhost but phones use cloud → ignore stale local hub, use cloud.
+  if(saved&&!isLocalHub(saved))return saved;
   if(isNativeShell())return DEFAULT_CLOUD_HUB;
-  return location.origin;
+  if(isLocalHub(location.origin)||isLocalHub(saved))return DEFAULT_CLOUD_HUB;
+  if(saved)return saved;
+  return location.origin||DEFAULT_CLOUD_HUB;
+}
+function useCloudHub(){
+  try{localStorage.setItem(HUB_KEY,DEFAULT_CLOUD_HUB)}catch{}
+  return DEFAULT_CLOUD_HUB;
 }
 function setHubBase(url){
   const u=String(url||'').trim().replace(/\/$/,'');
@@ -191,6 +207,25 @@ function setHubBase(url){
 }
 function apiHostLabel(){
   try{return String(hubBase()||location.origin||'').replace(/^https?:\/\//i,'').replace(/\/$/,'')}catch{return ''}
+}
+function serverBannerHtml(){
+  const host=apiHostLabel()||'—';
+  const cloud=String(DEFAULT_CLOUD_HUB).replace(/^https?:\/\//i,'').replace(/\/$/,'');
+  const onCloud=host===cloud||String(hubBase()).replace(/\/$/,'')===DEFAULT_CLOUD_HUB;
+  return `<div class="server-banner" id="serverBanner">
+    <div>${t('server_now')}: <b>${esc(host)}</b></div>
+    ${onCloud?'':`<button type="button" class="outline" id="useCloudBtn" style="margin-top:8px;width:100%;min-height:42px">${t('use_cloud_like_phone')}</button>`}
+  </div>`;
+}
+function wireServerBanner(){
+  document.querySelector('#useCloudBtn')?.addEventListener('click',()=>{
+    useCloudHub();
+    toast(t('cloud_switched')||DEFAULT_CLOUD_HUB);
+    auth();
+  });
+}
+function isPhoneMissingErr(msg){
+  return /нет на этом сервере|дар ҳамин сервер нест|not on this server|phone_not_found|Кормандон нест|нет в «Сотрудники»/i.test(String(msg||''));
 }
 /** Clean TJ mobile: 9 digits, no leading 0 / 992. */
 function sanitizePhoneDigits(raw){
@@ -634,6 +669,7 @@ function auth(){
         <p>${t('auth_sub')}</p>
       </section>
       <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
+        ${serverBannerHtml()}
         <h2>${t('role_ask')}</h2>
         <div class="sub">${t('role_ask_sub')}</div>
         <button type="button" class="primary role-btn" id="roleCashier" style="width:100%;margin:0 0 10px">${t('role_cashier')}</button>
@@ -641,6 +677,7 @@ function auth(){
         <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
       </div></section>
     </div>`;
+    wireServerBanner();
     document.querySelector('#roleCashier').onclick=()=>{authRolePick='cashier';authMode='login';auth()};
     document.querySelector('#roleDirector').onclick=()=>{authRolePick='director';authMode='login';auth()};
     document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);authRolePick=null;auth()};
@@ -664,10 +701,11 @@ function auth(){
       </div>
     </section>
     <section class="auth-form"><div class="auth-box">${langSwitcherHtml()}
+      ${serverBannerHtml()}
       <h2>${title}</h2>
       <div class="sub">${hint}</div>
       <form id="authForm">
-        ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(location.origin)}">`}
+        ${needsHubField()?`<label class="wide">${t('hub_connect')}<input name="hub" id="hubInput" value="${esc(hubBase()||DEFAULT_CLOUD_HUB)}" placeholder="${esc(DEFAULT_CLOUD_HUB)}" maxlength="200"><small style="color:var(--muted)">${t('hub_connect_hint')}</small></label>`:`<input type="hidden" name="hub" value="${esc(hubBase()||location.origin)}">`}
         ${isReg?`<label>${t('shop_name')}<input name="name" required maxlength="100" placeholder="${t('shop_ph')}" autocomplete="organization"></label>`:''}
         <label>${t('phone')}<input name="phone" type="tel" inputmode="numeric" required autocomplete="tel" placeholder="933530505" maxlength="20" enterkeyhint="next" autocapitalize="off" autocorrect="off" spellcheck="false"></label>
         <label class="wide">${t('app_pin')}<span class="pin-wrap"><input name="pin" id="authPin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" minlength="4" maxlength="8" required autocomplete="one-time-code" placeholder="${t('pin_hint')}" enterkeyhint="go"><button type="button" class="pin-eye" id="pinEye">${t('show_pin')}</button></span></label>
@@ -679,6 +717,7 @@ function auth(){
       <button class="switch" id="modeBtn" type="button">${t('mode_change')}</button>
     </div></section>
   </div>`;
+  wireServerBanner();
   document.querySelector('#backRole').onclick=()=>{authRolePick=null;authMode='login';auth()};
   document.querySelector('#modeBtn').onclick=()=>{localStorage.removeItem(MODE_KEY);authRolePick=null;auth()};
   document.querySelector('#switchBtn')?.addEventListener('click',()=>{
@@ -708,16 +747,28 @@ function auth(){
       body.phone=cleaned.phone;
       if(phoneEl)phoneEl.value=body.phone;
       body.pin=String(body.pin||'').replace(/\D/g,'');
-      if(hub)setHubBase(hub);
+      // Cashier/login: never stay on empty local DB when phones use cloud.
+      if(!isReg&&(!hub||isLocalHub(hub)))useCloudHub();
+      else if(hub)setHubBase(hub);
       if(!hubBase())throw Error(t('need_hub_url'));
       if(phoneErr)throw Error(phoneErr);
       if(body.phone.length!==9)throw Error(t('need_phone'));
       if(!/^\d{4,8}$/.test(body.pin))throw Error(t('bad_pin')||t('pin_hint'));
       if(isReg){
         body.biz_mode=draftMode()||'shop';
+        // New shop on PC: create on cloud by default (same DB as phones).
+        if(isLocalHub(hubBase()))useCloudHub();
         await api('register',body);
       }else{
-        await api('login',body);
+        try{
+          await api('login',body);
+        }catch(loginErr){
+          // PC was on local DB → retry once on cloud (where phones already work).
+          if(isPhoneMissingErr(loginErr.message)&&String(hubBase()).replace(/\/$/,'')!==DEFAULT_CLOUD_HUB){
+            useCloudHub();
+            await api('login',body);
+          }else throw loginErr;
+        }
         if(isCashier){
           const s=await api('state');
           if(s.user?.role!=='cashier'){
@@ -732,7 +783,9 @@ function auth(){
       document.body.classList.add('app-ready');
       load();
     }catch(err){
-      if(errEl){errEl.hidden=false;errEl.textContent=err.message}
+      let msg=err.message||t('err');
+      if(isPhoneMissingErr(msg))msg=`${msg}\n${t('server_now')}: ${apiHostLabel()}`;
+      if(errEl){errEl.hidden=false;errEl.textContent=msg}
       btn.disabled=false;
     }
   };
